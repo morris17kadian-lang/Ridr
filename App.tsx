@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { GLView } from 'expo-gl';
+import { Renderer } from 'expo-three';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import * as THREE from 'three';
 
 import { authEnabled, firebaseApp, firebaseReady, missingFirebaseConfig } from './src/lib/firebase';
 
@@ -32,6 +36,20 @@ const rideOptions = [
 ];
 
 const quickActions = ['Home', 'Work', 'Airport'];
+
+const pickupCoordinate = { latitude: 40.7582, longitude: -73.9856 };
+const dropoffCoordinate = { latitude: 40.7484, longitude: -73.9857 };
+const driverCoordinate = { latitude: 40.7548, longitude: -73.9912 };
+const routeCoordinates = [
+  driverCoordinate,
+  { latitude: 40.7563, longitude: -73.9892 },
+  { latitude: 40.7542, longitude: -73.9868 },
+  pickupCoordinate,
+  { latitude: 40.7524, longitude: -73.9859 },
+  dropoffCoordinate,
+];
+
+const carMarkerAsset = require('./assets/car-marker.png');
 
 // Car icon component - Clean simple style
 function CarIcon({ type, isSelected }: { type: string; isSelected: boolean }) {
@@ -120,6 +138,26 @@ function CarIcon({ type, isSelected }: { type: string; isSelected: boolean }) {
   return null;
 }
 
+function MapCarIcon() {
+  return (
+    <View style={styles.mapCarIconShell}>
+      <View style={styles.mapCarTopDeck}>
+        <View style={styles.mapCarWindowRear} />
+        <View style={styles.mapCarWindowFront} />
+      </View>
+      <View style={styles.mapCarBodyRealistic}>
+        <View style={styles.mapCarLightRear} />
+        <View style={styles.mapCarDoorLine} />
+        <View style={styles.mapCarLightFront} />
+      </View>
+      <View style={styles.mapCarWheelRow}>
+        <View style={styles.mapCarWheelRealistic} />
+        <View style={styles.mapCarWheelRealistic} />
+      </View>
+    </View>
+  );
+}
+
 // Profile Icon component
 function ProfileIcon() {
   return (
@@ -174,6 +212,139 @@ function ActivityIcon({ active }: { active: boolean }) {
   );
 }
 
+function VehiclePreview3D() {
+  const animationFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <GLView
+      style={styles.vehiclePreviewCanvas}
+      onContextCreate={(gl) => {
+        const renderer = new Renderer({ gl }) as unknown as {
+          setSize: (width: number, height: number) => void;
+          render: (scene: THREE.Scene, camera: THREE.Camera) => void;
+        };
+        renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#f3f7fb');
+
+        const camera = new THREE.PerspectiveCamera(
+          50,
+          gl.drawingBufferWidth / gl.drawingBufferHeight,
+          0.1,
+          1000,
+        );
+        camera.position.set(0, 1.8, 6);
+        camera.lookAt(0, 0.8, 0);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 1.25));
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.1);
+        directionalLight.position.set(5, 7, 6);
+        scene.add(directionalLight);
+
+        const fillLight = new THREE.DirectionalLight(0xb8d9ff, 0.6);
+        fillLight.position.set(-4, 3, -2);
+        scene.add(fillLight);
+
+        const carGroup = new THREE.Group();
+
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(3.6, 0.9, 1.8),
+          new THREE.MeshStandardMaterial({ color: '#f4f7fa', metalness: 0.15, roughness: 0.42 }),
+        );
+        body.position.y = 0.75;
+        carGroup.add(body);
+
+        const cabin = new THREE.Mesh(
+          new THREE.BoxGeometry(1.9, 0.8, 1.35),
+          new THREE.MeshStandardMaterial({ color: '#20252b', metalness: 0.2, roughness: 0.35 }),
+        );
+        cabin.position.set(0.15, 1.35, 0);
+        carGroup.add(cabin);
+
+        const windshield = new THREE.Mesh(
+          new THREE.BoxGeometry(0.7, 0.42, 1.18),
+          new THREE.MeshStandardMaterial({ color: '#bfe1fb', metalness: 0.1, roughness: 0.08 }),
+        );
+        windshield.position.set(0.62, 1.36, 0);
+        carGroup.add(windshield);
+
+        const rearWindow = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 0.42, 1.18),
+          new THREE.MeshStandardMaterial({ color: '#9cccf0', metalness: 0.1, roughness: 0.08 }),
+        );
+        rearWindow.position.set(-0.42, 1.36, 0);
+        carGroup.add(rearWindow);
+
+        const wheelMaterial = new THREE.MeshStandardMaterial({ color: '#1c1f23', roughness: 0.9 });
+        const rimMaterial = new THREE.MeshStandardMaterial({ color: '#5b646d', metalness: 0.45, roughness: 0.3 });
+        const wheelPositions = [
+          [-1.15, 0.25, 0.98],
+          [1.15, 0.25, 0.98],
+          [-1.15, 0.25, -0.98],
+          [1.15, 0.25, -0.98],
+        ];
+
+        wheelPositions.forEach(([x, y, z]) => {
+          const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.42, 24), wheelMaterial);
+          wheel.rotation.z = Math.PI / 2;
+          wheel.position.set(x, y, z);
+          carGroup.add(wheel);
+
+          const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.44, 18), rimMaterial);
+          rim.rotation.z = Math.PI / 2;
+          rim.position.set(x, y, z);
+          carGroup.add(rim);
+        });
+
+        const headlight = new THREE.Mesh(
+          new THREE.BoxGeometry(0.08, 0.16, 1.05),
+          new THREE.MeshStandardMaterial({ color: '#9fd7ff', emissive: '#6cbfff', emissiveIntensity: 0.35 }),
+        );
+        headlight.position.set(1.82, 0.82, 0);
+        carGroup.add(headlight);
+
+        const taillight = new THREE.Mesh(
+          new THREE.BoxGeometry(0.08, 0.16, 1.05),
+          new THREE.MeshStandardMaterial({ color: '#ff7266', emissive: '#ff4f40', emissiveIntensity: 0.25 }),
+        );
+        taillight.position.set(-1.82, 0.82, 0);
+        carGroup.add(taillight);
+
+        carGroup.rotation.y = -0.45;
+        carGroup.rotation.x = -0.08;
+        scene.add(carGroup);
+
+        const floor = new THREE.Mesh(
+          new THREE.CircleGeometry(3.1, 48),
+          new THREE.MeshStandardMaterial({ color: '#e5edf4', roughness: 1 }),
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -0.02;
+        scene.add(floor);
+
+        const render = () => {
+          animationFrameRef.current = requestAnimationFrame(render);
+          carGroup.rotation.y += 0.01;
+          renderer.render(scene, camera);
+          gl.endFrameEXP();
+        };
+
+        render();
+      }}
+    />
+  );
+}
+
 export default function App() {
   const [selectedRide, setSelectedRide] = useState('ride');
   const [activeTab, setActiveTab] = useState('home');
@@ -203,28 +374,68 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Map Section */}
         <View style={styles.mapCard}>
-          <View style={styles.mapTiltLayer} />
-          <View style={styles.mapBlockLarge} />
-          <View style={styles.mapBlockMedium} />
-          <View style={styles.mapBlockSmall} />
-          <View style={styles.mapRouteShadow} />
-          <View style={styles.mapRouteLine} />
-          <View style={styles.mapRoadHorizontal} />
-          <View style={styles.mapRoadVertical} />
-          <View style={styles.mapPinPrimary} />
-          <View style={styles.mapPinSecondary} />
+          <MapView
+            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+            style={StyleSheet.absoluteFillObject}
+            initialRegion={{
+              latitude: 40.7538,
+              longitude: -73.9878,
+              latitudeDelta: 0.018,
+              longitudeDelta: 0.018,
+            }}
+            showsCompass={false}
+            showsMyLocationButton={false}
+            toolbarEnabled={false}
+            rotateEnabled={true}
+            pitchEnabled={true}
+          >
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="#2f76c8"
+              strokeWidth={5}
+              lineCap="round"
+              lineJoin="round"
+            />
+
+            <Marker coordinate={pickupCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={styles.mapMarkerPickup} />
+            </Marker>
+
+            <Marker coordinate={dropoffCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={styles.mapMarkerDropoff} />
+            </Marker>
+
+            <Marker coordinate={driverCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={styles.driverMarkerWrap}>
+                <View style={styles.driverMarkerCard}>
+                  <Image source={carMarkerAsset} style={styles.mapCarImageLarge} resizeMode="contain" />
+                </View>
+              </View>
+            </Marker>
+          </MapView>
+
+          <View style={styles.mapTopShade} />
           <View style={styles.mapMiniCarLeft}>
-            <CarIcon type="sedan" isSelected={false} />
+            <Image source={carMarkerAsset} style={styles.mapCarImageSmall} resizeMode="contain" />
           </View>
           <View style={styles.mapMiniCarRight}>
-            <CarIcon type="suv" isSelected={false} />
+            <Image source={carMarkerAsset} style={styles.mapCarImageSmall} resizeMode="contain" />
           </View>
           <View style={styles.mapCarMarker}>
             <View style={styles.mapCarMarkerShadow} />
             <View style={styles.mapCarMarkerBubble}>
-              <CarIcon type="sedan" isSelected={true} />
+              <Image source={carMarkerAsset} style={styles.mapCarImageLarge} resizeMode="contain" />
             </View>
           </View>
+        </View>
+
+        <View style={styles.vehiclePreviewCard}>
+          <View style={styles.vehiclePreviewCopy}>
+            <Text style={styles.vehiclePreviewLabel}>3D vehicle preview</Text>
+            <Text style={styles.vehiclePreviewTitle}>Experimental render stack installed</Text>
+            <Text style={styles.vehiclePreviewBody}>This uses `expo-gl`, `three`, and `expo-three` so you can swap in a better car model later.</Text>
+          </View>
+          <VehiclePreview3D />
         </View>
 
         {/* Destination Input Card */}
@@ -475,10 +686,59 @@ const styles = StyleSheet.create({
   mapCard: {
     height: 240,
     borderRadius: 24,
-    backgroundColor: '#eef3f8',
+    backgroundColor: '#dfe7ef',
     overflow: 'hidden',
     position: 'relative',
     marginBottom: 16,
+  },
+  mapTopShade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 54,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+  },
+  mapMarkerPickup: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#171717',
+    borderWidth: 5,
+    borderColor: '#ffd54a',
+  },
+  mapMarkerDropoff: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#ffd54a',
+    borderWidth: 5,
+    borderColor: '#171717',
+  },
+  driverMarkerWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  driverMarkerCard: {
+    width: 74,
+    height: 54,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  mapCarImageLarge: {
+    width: 58,
+    height: 34,
+  },
+  mapCarImageSmall: {
+    width: 48,
+    height: 28,
   },
   mapTiltLayer: {
     position: 'absolute',
@@ -637,6 +897,125 @@ const styles = StyleSheet.create({
     bottom: 38,
     transform: [{ rotate: '10deg' }, { scale: 0.68 }],
     opacity: 0.85,
+  },
+  vehiclePreviewCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  vehiclePreviewCopy: {
+    flex: 1,
+    gap: 6,
+  },
+  vehiclePreviewLabel: {
+    color: '#666666',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  vehiclePreviewTitle: {
+    color: '#171717',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  vehiclePreviewBody: {
+    color: '#666666',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  vehiclePreviewCanvas: {
+    width: 132,
+    height: 104,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#f3f7fb',
+  },
+  mapCarIconShell: {
+    width: 54,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  mapCarTopDeck: {
+    width: 28,
+    height: 12,
+    marginBottom: -2,
+    backgroundColor: '#20252b',
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 10,
+    borderBottomLeftRadius: 5,
+    borderBottomRightRadius: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-evenly',
+    zIndex: 2,
+  },
+  mapCarWindowRear: {
+    width: 8,
+    height: 5,
+    borderRadius: 2,
+    backgroundColor: '#b8d7f1',
+  },
+  mapCarWindowFront: {
+    width: 9,
+    height: 5,
+    borderRadius: 2,
+    backgroundColor: '#d8eefc',
+  },
+  mapCarBodyRealistic: {
+    width: 42,
+    height: 14,
+    borderRadius: 10,
+    borderTopLeftRadius: 7,
+    borderTopRightRadius: 8,
+    backgroundColor: '#f3f6f9',
+    borderWidth: 1,
+    borderColor: '#ced8e2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  mapCarDoorLine: {
+    width: 1,
+    height: 8,
+    backgroundColor: '#c9d1da',
+  },
+  mapCarLightRear: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#ff6f61',
+  },
+  mapCarLightFront: {
+    width: 5,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#9fd7ff',
+  },
+  mapCarWheelRow: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: -1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  mapCarWheelRealistic: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#1c1f23',
   },
   // Destination Card
   destinationCard: {
