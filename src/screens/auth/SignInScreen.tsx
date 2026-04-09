@@ -10,6 +10,7 @@ import {
   Pressable,
   ScrollView,
   Text,
+  ToastAndroid,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -33,7 +34,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
-  const [username, setUsername] = useState('');
+  const [loginEmail, setLoginEmail] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -85,17 +86,44 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
     ],
   };
 
+  const toFriendlyError = (message: string) => {
+    const m = message.trim();
+    const lower = m.toLowerCase();
+    if (lower.includes('missing expo_public_base_url')) {
+      return 'App setup issue: base URL is missing. Please restart the app and try again.';
+    }
+    if (lower.includes('network request failed') || lower.includes('failed to fetch')) {
+      return 'Cannot reach the server. Check your internet and try again.';
+    }
+    if (lower.includes('invalid credentials') || lower.includes('unauthorized')) {
+      return 'Email or password is incorrect.';
+    }
+    if (lower.includes('request failed (500)')) {
+      return 'Server error. Please try again in a moment.';
+    }
+    return m || 'Something went wrong. Please try again.';
+  };
+
+  const showAuthError = (title: string, message: string) => {
+    const friendly = toFriendlyError(message);
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(friendly, ToastAndroid.LONG);
+      return;
+    }
+    Alert.alert(title, friendly);
+  };
+
   const onSubmit = async () => {
     if (mode === 'login') {
-      if (!username.trim() || !password) {
-        Alert.alert('Sign in', 'Enter your username and password.');
+      if (!loginEmail.trim() || !password) {
+        showAuthError('Sign in', 'Enter your email and password.');
         return;
       }
       setSubmitting(true);
       try {
-        await signIn(username.trim(), password);
+        await signIn(loginEmail.trim(), password);
       } catch (e) {
-        Alert.alert('Sign in', e instanceof Error ? e.message : 'Something went wrong.');
+        showAuthError('Sign in', e instanceof Error ? e.message : 'Something went wrong.');
       } finally {
         setSubmitting(false);
       }
@@ -106,24 +134,24 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
     const l = lastName.trim();
     const p = phone.trim();
     if (!f || !l) {
-      Alert.alert('Sign up', 'Enter your first and last name.');
+      showAuthError('Sign up', 'Enter your first and last name.');
       return;
     }
     if (!p) {
-      Alert.alert('Sign up', 'Enter your phone number.');
+      showAuthError('Sign up', 'Enter your phone number.');
       return;
     }
     const phoneParsed = parsePhoneNumberFromString(p, 'US') ?? parsePhoneNumberFromString(p);
     if (!phoneParsed || !isValidPhoneNumber(phoneParsed.number)) {
-      Alert.alert('Sign up', 'Enter a valid phone number. Include country code (e.g. +1 555 123 4567).');
+      showAuthError('Sign up', 'Enter a valid phone number (for example: +1 555 123 4567).');
       return;
     }
     if (!email.trim()) {
-      Alert.alert('Sign up', 'Enter your email address.');
+      showAuthError('Sign up', 'Enter your email address.');
       return;
     }
-    if (!password || password.length < 6) {
-      Alert.alert('Sign up', 'Use at least 6 characters for your password.');
+    if (!password || password.length < 8) {
+      showAuthError('Sign up', 'Use at least 8 characters for your password.');
       return;
     }
 
@@ -137,7 +165,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
         phone: phoneParsed.number,
       });
     } catch (e) {
-      Alert.alert('Sign up', e instanceof Error ? e.message : 'Something went wrong.');
+      showAuthError('Sign up', e instanceof Error ? e.message : 'Something went wrong.');
     } finally {
       setSubmitting(false);
     }
@@ -212,15 +240,16 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
 
           {mode === 'login' ? (
             <AuthTextField
-              label="Username"
-              icon="person-outline"
-              value={username}
-              onChangeText={setUsername}
-              placeholder="Your first name"
+              label="Email address"
+              icon="mail-outline"
+              value={loginEmail}
+              onChangeText={setLoginEmail}
+              placeholder="you@example.com"
               autoCapitalize="none"
               autoCorrect={false}
-              autoComplete="username"
-              textContentType="username"
+              keyboardType="email-address"
+              autoComplete="email"
+              textContentType="emailAddress"
             />
           ) : (
             <AuthTextField
@@ -241,7 +270,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
             label={mode === 'login' ? 'Password' : 'Create password'}
             value={password}
             onChangeText={setPassword}
-            placeholder={mode === 'login' ? 'Enter your password' : 'At least 6 characters'}
+            placeholder={mode === 'login' ? 'Enter your password' : 'At least 8 characters'}
             autoComplete={mode === 'login' ? 'password' : 'password-new'}
             textContentType={mode === 'login' ? 'password' : 'newPassword'}
           />

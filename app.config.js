@@ -6,7 +6,7 @@ module.exports = {
     orientation: 'portrait',
     icon: './assets/ridr-logo.png',
     scheme: 'ridr',
-    userInterfaceStyle: 'light',
+    userInterfaceStyle: 'automatic',
     splash: {
       image: './assets/ridr-logo.png',
       imageWidth: 240,
@@ -37,6 +37,7 @@ module.exports = {
     },
     extra: {
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+      baseUrl: process.env.EXPO_PUBLIC_BASE_URL,
     },
     plugins: ['expo-web-browser'],
   },
