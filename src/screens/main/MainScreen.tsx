@@ -22,6 +22,7 @@ import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
+import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
 import { authEnabled, firebaseApp, firebaseReady, missingFirebaseConfig } from '../../lib/firebase';
 import {
@@ -32,7 +33,7 @@ import {
   validateToE164,
 } from '../../lib/phone';
 import { addCardPreviewAsset, greyCarAsset } from '../../assets/images';
-import { useAuth } from '../../context/AuthContext';
+import { AUTH_SESSION_KEY, useAuth } from '../../context/AuthContext';
 import { useAppTheme } from '../../theme/ThemeProvider';
 
 const rideOptions = [
@@ -71,6 +72,50 @@ type DestinationSuggestion = {
   icon: 'airplane' | 'business' | 'location' | 'cafe' | 'storefront' | 'home';
   coordinate: LatLng;
 };
+
+type SavedPlace = {
+  id?: string;
+  label?: string;
+  type?: string;
+  address?: string;
+  title?: string;
+};
+
+type MeResponse = {
+  id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  savedPlaces?: SavedPlace[];
+};
+
+const PROFILE_ME_CACHE_KEY = 'profile_me_cache_v1';
+
+function resolveBaseUrl(): string {
+  const fromEnv = process.env.EXPO_PUBLIC_BASE_URL;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim().replace(/\/+$/, '');
+
+  const fromExpoConfig = Constants.expoConfig?.extra?.baseUrl;
+  if (typeof fromExpoConfig === 'string' && fromExpoConfig.trim()) {
+    return fromExpoConfig.trim().replace(/\/+$/, '');
+  }
+
+  const fromManifest = ((Constants as unknown as { manifest?: { extra?: { baseUrl?: string } } }).manifest
+    ?.extra?.baseUrl ?? '');
+  if (typeof fromManifest === 'string' && fromManifest.trim()) {
+    return fromManifest.trim().replace(/\/+$/, '');
+  }
+
+  const fromManifest2 = ((Constants as unknown as {
+    manifest2?: { extra?: { expoClient?: { extra?: { baseUrl?: string } } } };
+  }).manifest2?.extra?.expoClient?.extra?.baseUrl ?? '');
+  if (typeof fromManifest2 === 'string' && fromManifest2.trim()) {
+    return fromManifest2.trim().replace(/\/+$/, '');
+  }
+
+  return '';
+}
 
 function resolveGoogleMapsApiKey(): { key: string | null; source: string } {
   const fromEnv = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -216,6 +261,44 @@ function decodeGooglePolyline(encoded: string): LatLng[] {
   return points;
 }
 
+function interpolateRoutePoint(route: LatLng[], progress: number): LatLng | null {
+  if (route.length < 2) return route[0] ?? null;
+  const clamped = Math.max(0, Math.min(1, progress));
+
+  const segmentLengths: number[] = [];
+  let total = 0;
+  for (let i = 0; i < route.length - 1; i += 1) {
+    const a = route[i];
+    const b = route[i + 1];
+    const dx = b.longitude - a.longitude;
+    const dy = b.latitude - a.latitude;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    segmentLengths.push(len);
+    total += len;
+  }
+  if (total <= 0) return route[0];
+
+  const target = clamped * total;
+  let traversed = 0;
+
+  for (let i = 0; i < segmentLengths.length; i += 1) {
+    const seg = segmentLengths[i];
+    const next = traversed + seg;
+    if (target <= next) {
+      const local = seg > 0 ? (target - traversed) / seg : 0;
+      const start = route[i];
+      const end = route[i + 1];
+      return {
+        latitude: start.latitude + (end.latitude - start.latitude) * local,
+        longitude: start.longitude + (end.longitude - start.longitude) * local,
+      };
+    }
+    traversed = next;
+  }
+
+  return route[route.length - 1];
+}
+
 async function geocodeAddress(
   address: string,
   apiKey?: string
@@ -290,14 +373,14 @@ const DEFAULT_PROFILE_CARDS: ProfileCard[] = [
 ];
 
 // Header notifications icon
-function SupportIcon() {
+function SupportIcon({ color = '#ffffff' }: { color?: string }) {
   return (
-    <Ionicons name="notifications-outline" size={22} color="#ffffff" />
+    <Ionicons name="notifications-outline" size={22} color={color} />
   );
 }
 
-function ProfileIcon({ size }: { size: number }) {
-  return <Ionicons name="person" size={size} color="#171717" />;
+function ProfileIcon({ size, color = '#171717' }: { size: number; color?: string }) {
+  return <Ionicons name="person" size={size} color={color} />;
 }
 
 // Tab icons use Ionicons (from @expo/vector-icons)
@@ -316,19 +399,21 @@ export default function MainScreen() {
   // Profile
   const [userFirstName, setUserFirstName] = useState('Sarah');
   const [userLastName, setUserLastName] = useState('');
+  const [userId, setUserId] = useState('');
   const [editingFirstName, setEditingFirstName] = useState('');
   const [editingLastName, setEditingLastName] = useState('');
   const [editingPhone, setEditingPhone] = useState('');
   const [editingEmail, setEditingEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
   const [userPhoneE164, setUserPhoneE164] = useState<string | null>(null);
-  const [userCountryCode, setUserCountryCode] = useState('+1876');
+  const [userCountryCode, setUserCountryCode] = useState('+1');
   const [userEmail, setUserEmail] = useState('');
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [userUsername, setUserUsername] = useState('');
   const [editingUsername, setEditingUsername] = useState('');
   const [editingPassword, setEditingPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [countryCode, setCountryCode] = useState('+1876');
+  const [countryCode, setCountryCode] = useState('+1');
   const [countryPickerVisible, setCountryPickerVisible] = useState(false);
 
   // Addresses
@@ -344,6 +429,7 @@ export default function MainScreen() {
   const [toUserEdited, setToUserEdited] = useState(false);
   const [currentLocationLabel, setCurrentLocationLabel] = useState('Current location');
   const [roadRouteCoords, setRoadRouteCoords] = useState<LatLng[]>([]);
+  const [routeAnimatorPoint, setRouteAnimatorPoint] = useState<LatLng | null>(null);
   const [routeIssue, setRouteIssue] = useState<string | null>(null);
   const toInputRef = useRef<TextInput>(null);
   const toFocusedRef = useRef(false);
@@ -366,7 +452,6 @@ export default function MainScreen() {
       const [
         savedFirst,
         savedLast,
-        savedName,
         savedHome,
         savedWork,
         savedPhone,
@@ -378,7 +463,6 @@ export default function MainScreen() {
       ] = await Promise.all([
         AsyncStorage.getItem('profile_first_name'),
         AsyncStorage.getItem('profile_last_name'),
-        AsyncStorage.getItem('profile_name'),
         AsyncStorage.getItem('address_home'),
         AsyncStorage.getItem('address_work'),
         AsyncStorage.getItem('profile_phone'),
@@ -390,19 +474,17 @@ export default function MainScreen() {
       ]);
       if (savedFirst !== null) {
         setUserFirstName(savedFirst);
-      } else if (savedName) {
-        const p = savedName.trim().split(/\s+/);
-        setUserFirstName(p[0] || 'Sarah');
+      } else {
+        setUserFirstName('Sarah');
       }
       if (savedLast !== null) {
         setUserLastName(savedLast);
-      } else if (savedName && savedFirst === null) {
-        const p = savedName.trim().split(/\s+/);
-        setUserLastName(p.slice(1).join(' ') || '');
+      } else {
+        setUserLastName('');
       }
       if (savedHome) setHomeAddress(savedHome);
       if (savedWork) setWorkAddress(savedWork);
-      const country = savedCountry || '+1876';
+      const country = savedCountry === '+1876' ? '+1' : (savedCountry || '+1');
       setCountryCode(country);
       setUserCountryCode(country);
       if (savedPhone) {
@@ -457,6 +539,130 @@ export default function MainScreen() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    const applyMeToProfile = async (me: MeResponse, persistCache: boolean) => {
+      const nextFirst = (me.firstName ?? '').trim();
+      const nextLast = (me.lastName ?? '').trim();
+      const nextEmail = (me.email ?? '').trim().toLowerCase();
+      const nextPhone = (me.phone ?? '').trim();
+      const nextSavedPlaces = Array.isArray(me.savedPlaces) ? me.savedPlaces : [];
+
+      if (nextFirst) {
+        setUserFirstName(nextFirst);
+        await AsyncStorage.setItem('profile_first_name', nextFirst);
+      }
+      setUserLastName(nextLast);
+      await AsyncStorage.setItem('profile_last_name', nextLast);
+      setUserId(typeof me.id === 'string' ? me.id : '');
+      setUserEmail(nextEmail);
+      await AsyncStorage.setItem('profile_email', nextEmail);
+      setSavedPlaces(nextSavedPlaces);
+
+      if (nextPhone) {
+        setUserPhoneE164(nextPhone);
+        await AsyncStorage.setItem('profile_phone_e164', nextPhone);
+        const parsed = parsePhoneNumberFromString(nextPhone);
+        const derivedCountry = parsed?.countryCallingCode ? `+${parsed.countryCallingCode}` : '';
+        const country = derivedCountry || userCountryCode || '+1';
+        if (country === '+1') {
+          setCountryCode('+1');
+          setUserCountryCode('+1');
+          await AsyncStorage.setItem('profile_country_code', '+1');
+        }
+        const nat = parsed ? parsed.nationalNumber : migrateLegacyNational(nextPhone, country);
+        setUserPhone(nat);
+        await AsyncStorage.setItem('profile_phone', nat);
+      }
+
+      const home = nextSavedPlaces.find((p) => (p.type ?? p.label ?? '').toLowerCase() === 'home');
+      const work = nextSavedPlaces.find((p) => (p.type ?? p.label ?? '').toLowerCase() === 'work');
+      const homeAddr = (home?.address ?? home?.title ?? '').trim();
+      const workAddr = (work?.address ?? work?.title ?? '').trim();
+      if (homeAddr) {
+        setHomeAddress(homeAddr);
+        await AsyncStorage.setItem('address_home', homeAddr);
+      }
+      if (workAddr) {
+        setWorkAddress(workAddr);
+        await AsyncStorage.setItem('address_work', workAddr);
+      }
+
+      if (persistCache) {
+        await AsyncStorage.setItem(PROFILE_ME_CACHE_KEY, JSON.stringify(me));
+      }
+    };
+
+    const fetchMe = async () => {
+      try {
+        const cachedRaw = await AsyncStorage.getItem(PROFILE_ME_CACHE_KEY);
+        if (cachedRaw) {
+          try {
+            const cached = JSON.parse(cachedRaw) as MeResponse;
+            if (cached && typeof cached === 'object' && typeof cached.id === 'string') {
+              await applyMeToProfile(cached, false);
+            }
+          } catch {
+            await AsyncStorage.removeItem(PROFILE_ME_CACHE_KEY);
+          }
+        }
+
+        const sessionRaw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
+        if (!sessionRaw) return;
+        const session = JSON.parse(sessionRaw) as {
+          accessToken?: string;
+          refreshToken?: string;
+          user?: { id?: string; email?: string; firstName?: string; lastName?: string; phone?: string };
+        };
+        const baseUrl = resolveBaseUrl();
+        if (!baseUrl || !session?.accessToken) return;
+
+        let token = session.accessToken;
+        let res = await fetch(`${baseUrl}/users/me`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (res.status === 401 && typeof session.refreshToken === 'string' && session.refreshToken) {
+          const refreshRes = await fetch(`${baseUrl}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: session.refreshToken }),
+          });
+          if (refreshRes.ok) {
+            const refreshed = (await refreshRes.json()) as {
+              accessToken?: string;
+              refreshToken?: string;
+            };
+            if (typeof refreshed.accessToken === 'string' && typeof refreshed.refreshToken === 'string') {
+              token = refreshed.accessToken;
+              await AsyncStorage.setItem(
+                AUTH_SESSION_KEY,
+                JSON.stringify({
+                  ...session,
+                  accessToken: refreshed.accessToken,
+                  refreshToken: refreshed.refreshToken,
+                })
+              );
+              res = await fetch(`${baseUrl}/users/me`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+            }
+          }
+        }
+
+        if (!res.ok) return;
+        const me = (await res.json()) as MeResponse;
+        if (!me || typeof me.id !== 'string' || typeof me.email !== 'string') return;
+        await applyMeToProfile(me, true);
+      } catch {
+        /* keep local cached profile */
+      }
+    };
+
+    void fetchMe();
+  }, [userCountryCode]);
 
   useEffect(() => {
     sheetMinimizedRef.current = sheetMinimized;
@@ -597,7 +803,30 @@ export default function MainScreen() {
     setAddressInput('');
   };
 
-  const displayName = `${userFirstName} ${userLastName}`.trim() || userFirstName;
+  const displayName = userFirstName.trim() || 'Ridr';
+  const shortUserId = userId.trim() ? userId.trim().slice(0, 5) : '';
+  const ui = {
+    screenBg: isDark ? '#0c0c0d' : '#f5f5f5',
+    panelBg: isDark ? '#151517' : '#ffffff',
+    cardBg: isDark ? '#1b1c20' : '#ffffff',
+    softBg: isDark ? '#202227' : '#f7f7f7',
+    text: isDark ? '#f5f5f5' : '#171717',
+    textMuted: isDark ? '#a1a1aa' : '#666666',
+    divider: isDark ? '#2b2b31' : '#e9e9e9',
+    placeholder: isDark ? '#7b7b85' : '#aaaaaa',
+    headerOverlay: isDark ? 'rgba(12,12,13,0.88)' : 'rgba(255,255,255,0.82)',
+    tabActive: isDark ? '#f5f5f5' : '#1a1a1a',
+    tabInactive: isDark ? '#b3b3c2' : '#aaaaaa',
+    ctaBg: isDark ? '#ffd54a' : '#171717',
+    ctaText: isDark ? '#171717' : '#ffffff',
+  } as const;
+  const savedPlacesSummary =
+    savedPlaces.length > 0
+      ? savedPlaces
+          .map((p) => (p.title ?? p.address ?? p.label ?? p.type ?? '').trim())
+          .filter(Boolean)
+          .join(', ')
+      : '—';
 
   const saveProfile = async () => {
     const first = editingFirstName.trim();
@@ -610,7 +839,7 @@ export default function MainScreen() {
     setUserLastName(last);
     await AsyncStorage.setItem('profile_first_name', first);
     await AsyncStorage.setItem('profile_last_name', last);
-    await AsyncStorage.setItem('profile_name', `${first} ${last}`.trim());
+    await AsyncStorage.removeItem('profile_name');
 
     if (!natDigits) {
       if (userPhoneE164) await releaseE164(userPhoneE164);
@@ -689,28 +918,18 @@ export default function MainScreen() {
     setScreen('profileEdit');
   };
 
-  const onResetPassword = () => {
-    const email = userEmail.trim();
-    if (!email) {
-      Alert.alert(
-        'Reset password',
-        'Add an email in your profile first, then try again.',
-        [{ text: 'OK' }],
-      );
-      return;
-    }
+  const onConfirmSignOut = () => {
     Alert.alert(
-      'Reset password',
-      `We will send a reset link to ${email}.`,
+      'Sign out?',
+      'Are you sure you want to sign out of your account?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Send link', onPress: () => {} },
-      ],
+        { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
+      ]
     );
   };
 
   const countryCodes = [
-    { code: '+1876', label: 'Jamaica' },
     { code: '+1', label: 'US / CA' },
     { code: '+44', label: 'UK' },
     { code: '+91', label: 'India' },
@@ -769,6 +988,29 @@ export default function MainScreen() {
   const hasRouteInputs = !!toQuery.trim() && !!destinationQuery.trim();
   const hasRoute = hasRouteInputs && roadRouteCoords.length > 1;
   const showPickupPoint = !!userLocation && isCurrentLocationQuery && !hasRoute;
+
+  useEffect(() => {
+    if (!hasRoute) {
+      setRouteAnimatorPoint(null);
+      return;
+    }
+
+    let raf = 0;
+    const startedAt = Date.now();
+    const durationMs = 6000;
+
+    const tick = () => {
+      const elapsed = (Date.now() - startedAt) % durationMs;
+      const progress = elapsed / durationMs;
+      setRouteAnimatorPoint(interpolateRoutePoint(roadRouteCoords, progress));
+      raf = requestAnimationFrame(tick);
+    };
+
+    tick();
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [hasRoute, roadRouteCoords]);
 
   // Animated drag-to-expand-map
   const panValue = useRef(new Animated.Value(0)).current;
@@ -967,15 +1209,15 @@ export default function MainScreen() {
   // ── Profile (read-only) ─────────────────────────────────────────
   if (screen === 'profile') {
     return (
-      <View style={styles.editProfileRoot}>
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
         <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
-        <View style={styles.editProfileHeader}>
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.screenBg, borderBottomColor: ui.divider }]}>
           <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color="#171717" />
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
           </Pressable>
-          <Text style={styles.editProfileHeaderTitle}>Profile</Text>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Profile</Text>
           <Pressable style={styles.editProfileHeaderSide} onPress={openProfileEdit} hitSlop={8}>
-            <Ionicons name="pencil" size={22} color="#171717" />
+            <Ionicons name="pencil" size={22} color={ui.text} />
           </Pressable>
         </View>
 
@@ -985,42 +1227,56 @@ export default function MainScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.editProfileAvatarWrap}>
-            <View style={styles.editProfileAvatarImage}>
-              <Ionicons name="person" size={56} color="#8a8a8a" />
+            <View style={[styles.editProfileAvatarImage, { backgroundColor: ui.softBg }]}>
+              <Ionicons name="person" size={56} color={ui.textMuted} />
             </View>
           </View>
 
           <View style={styles.profileViewSectionHeadingWrap}>
-            <Text style={styles.profileViewSectionTitle}>Personal information</Text>
+            <Text style={[styles.profileViewSectionTitle, { color: ui.text }]}>Personal information</Text>
           </View>
-          <View style={styles.profileViewCard}>
+          <View style={[styles.profileViewCard, { backgroundColor: ui.cardBg }]}>
             <View style={styles.profileViewRow}>
-              <Text style={styles.profileViewLabel}>First name</Text>
-              <Text style={styles.profileViewValue}>{userFirstName.trim() ? userFirstName : '—'}</Text>
+              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>First name</Text>
+              <Text style={[styles.profileViewValue, { color: ui.text }]}>{userFirstName.trim() ? userFirstName : '—'}</Text>
             </View>
-            <View style={styles.profileViewDivider} />
+            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
             <View style={styles.profileViewRow}>
-              <Text style={styles.profileViewLabel}>Last name</Text>
-              <Text style={styles.profileViewValue}>{userLastName.trim() ? userLastName : '—'}</Text>
+              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Last name</Text>
+              <Text style={[styles.profileViewValue, { color: ui.text }]}>{userLastName.trim() ? userLastName : '—'}</Text>
             </View>
-            <View style={styles.profileViewDivider} />
+            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
             <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
-              <Text style={styles.profileViewLabel}>Email</Text>
-              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline]} numberOfLines={4}>
+              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>User ID</Text>
+              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={3}>
+                {shortUserId || '—'}
+              </Text>
+            </View>
+            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
+            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
+              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Email</Text>
+              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={4}>
                 {userEmail.trim() ? userEmail : '—'}
               </Text>
             </View>
-            <View style={styles.profileViewDivider} />
+            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
             <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
-              <Text style={styles.profileViewLabel}>Phone</Text>
-              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline]} numberOfLines={3}>
+              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Phone</Text>
+              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={3}>
                 {userPhoneE164 ? formatE164International(userPhoneE164) : '—'}
+              </Text>
+            </View>
+            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
+            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
+              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Saved places</Text>
+              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={5}>
+                {savedPlacesSummary}
               </Text>
             </View>
           </View>
 
           <View style={styles.profilePaymentSectionHeader}>
-            <Text style={[styles.profileViewSectionTitle, styles.profileViewSectionTitleFlex]}>Payment methods</Text>
+            <Text style={[styles.profileViewSectionTitle, styles.profileViewSectionTitleFlex, { color: ui.text }]}>Payment methods</Text>
             <Pressable
               style={styles.profileAddCardIconBtn}
               onPress={() => {
@@ -1033,10 +1289,10 @@ export default function MainScreen() {
               hitSlop={8}
               accessibilityLabel="Add card"
             >
-              <Ionicons name="add" size={20} color="#171717" />
+              <Ionicons name="add" size={20} color={ui.text} />
             </Pressable>
           </View>
-          <View style={styles.profileViewCard}>
+          <View style={[styles.profileViewCard, { backgroundColor: ui.cardBg }]}>
             {cards.map((card, i) => (
               <View key={card.id}>
                 <Pressable
@@ -1050,8 +1306,8 @@ export default function MainScreen() {
                     <Text style={styles.profilePaymentCardIconText}>{card.type === 'visa' ? 'VISA' : 'MC'}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.profilePaymentLabel}>{card.label}</Text>
-                    <Text style={styles.profilePaymentSub}>•••• {card.last4}</Text>
+                    <Text style={[styles.profilePaymentLabel, { color: ui.text }]}>{card.label}</Text>
+                    <Text style={[styles.profilePaymentSub, { color: ui.textMuted }]}>•••• {card.last4}</Text>
                   </View>
                   {defaultCard === card.id && (
                     <View style={styles.profilePaymentDefaultBadge}>
@@ -1061,20 +1317,22 @@ export default function MainScreen() {
                   <Ionicons
                     name={defaultCard === card.id ? 'radio-button-on' : 'radio-button-off'}
                     size={22}
-                    color={defaultCard === card.id ? '#ffd54a' : '#cccccc'}
+                    color={defaultCard === card.id ? '#ffd54a' : ui.textMuted}
                   />
                 </Pressable>
-                {i < cards.length - 1 ? <View style={styles.profileViewDivider} /> : null}
+                {i < cards.length - 1 ? <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} /> : null}
               </View>
             ))}
           </View>
 
-          <Pressable style={styles.resetPasswordButton} onPress={onResetPassword}>
-            <Text style={styles.resetPasswordButtonText}>Reset password</Text>
-          </Pressable>
-
-          <Pressable style={styles.signOutButton} onPress={() => void signOut()}>
-            <Text style={styles.signOutButtonText}>Sign out</Text>
+          <Pressable
+            style={[
+              styles.signOutButton,
+              { backgroundColor: isDark ? '#7f1d1d' : '#fee2e2', borderColor: isDark ? '#b91c1c' : '#ef4444' },
+            ]}
+            onPress={onConfirmSignOut}
+          >
+            <Text style={[styles.signOutButtonText, { color: isDark ? '#fecaca' : '#b91c1c' }]}>Sign out</Text>
           </Pressable>
         </ScrollView>
 
@@ -1164,13 +1422,13 @@ export default function MainScreen() {
   // ── Edit Profile ────────────────────────────────────────────────
   if (screen === 'profileEdit') {
     return (
-      <View style={styles.editProfileRoot}>
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
         <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
-        <View style={styles.editProfileHeader}>
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.screenBg, borderBottomColor: ui.divider }]}>
           <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('profile')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color="#171717" />
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
           </Pressable>
-          <Text style={styles.editProfileHeaderTitle}>Edit Profile</Text>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Edit Profile</Text>
           <Pressable
             style={styles.editProfileHeaderSide}
             onPress={() => { void saveProfile(); }}
@@ -1191,98 +1449,98 @@ export default function MainScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.editProfileAvatarWrap}>
-            <View style={styles.editProfileAvatarImage}>
-              <Ionicons name="person" size={56} color="#8a8a8a" />
+            <View style={[styles.editProfileAvatarImage, { backgroundColor: ui.softBg }]}>
+              <Ionicons name="person" size={56} color={ui.textMuted} />
             </View>
-            <Pressable style={styles.editProfileAvatarCamera} hitSlop={6}>
-              <Ionicons name="camera" size={18} color="#171717" />
+            <Pressable style={[styles.editProfileAvatarCamera, { backgroundColor: ui.cardBg }]} hitSlop={6}>
+              <Ionicons name="camera" size={18} color={ui.text} />
             </Pressable>
           </View>
 
           <View style={styles.editProfileField}>
-            <Text style={styles.editProfileLabel}>First name</Text>
+            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>First name</Text>
             <TextInput
-              style={styles.editProfileInput}
+              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
               value={editingFirstName}
               onChangeText={setEditingFirstName}
               placeholder="Charlotte"
-              placeholderTextColor="#b0b0b0"
+              placeholderTextColor={ui.placeholder}
               autoCapitalize="words"
             />
           </View>
 
           <View style={styles.editProfileField}>
-            <Text style={styles.editProfileLabel}>Last name</Text>
+            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Last name</Text>
             <TextInput
-              style={styles.editProfileInput}
+              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
               value={editingLastName}
               onChangeText={setEditingLastName}
               placeholder="King"
-              placeholderTextColor="#b0b0b0"
+              placeholderTextColor={ui.placeholder}
               autoCapitalize="words"
             />
           </View>
 
           <View style={styles.editProfileField}>
-            <Text style={styles.editProfileLabel}>E mail address</Text>
+            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>E mail address</Text>
             <TextInput
-              style={styles.editProfileInput}
+              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
               value={editingEmail}
               onChangeText={setEditingEmail}
               placeholder="johnkinggraphics@gmail.com"
-              placeholderTextColor="#b0b0b0"
+              placeholderTextColor={ui.placeholder}
               keyboardType="email-address"
               autoCapitalize="none"
             />
           </View>
 
           <View style={styles.editProfileField}>
-            <Text style={styles.editProfileLabel}>User name</Text>
+            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>User name</Text>
             <TextInput
-              style={styles.editProfileInput}
+              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
               value={editingUsername}
               onChangeText={setEditingUsername}
               placeholder="@johnkinggraphics"
-              placeholderTextColor="#b0b0b0"
+              placeholderTextColor={ui.placeholder}
               autoCapitalize="none"
             />
           </View>
 
           <View style={styles.editProfileField}>
-            <Text style={styles.editProfileLabel}>Password</Text>
-            <View style={styles.editProfilePasswordRow}>
+            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Password</Text>
+            <View style={[styles.editProfilePasswordRow, { backgroundColor: ui.softBg }]}>
               <TextInput
-                style={[styles.editProfileInput, styles.editProfilePasswordInput]}
+                style={[styles.editProfileInput, styles.editProfilePasswordInput, { backgroundColor: 'transparent', color: ui.text }]}
                 value={editingPassword}
                 onChangeText={setEditingPassword}
                 placeholder="••••••••••"
-                placeholderTextColor="#b0b0b0"
+                placeholderTextColor={ui.placeholder}
                 secureTextEntry={!showPassword}
                 autoCapitalize="none"
               />
               <Pressable style={styles.editProfileEyeBtn} onPress={() => setShowPassword(v => !v)} hitSlop={8}>
-                <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={22} color="#171717" />
+                <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={22} color={ui.text} />
               </Pressable>
             </View>
           </View>
 
           <View style={styles.editProfileField}>
-            <Text style={styles.editProfileLabel}>Phone number</Text>
+            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Phone number</Text>
             <View style={styles.editProfilePhoneRow}>
-              <Pressable style={styles.editProfileCountryBtn} onPress={() => setCountryPickerVisible(true)}>
-                <Text style={styles.editProfileCountryText}>{countryCode}</Text>
-                <Ionicons name="chevron-down" size={16} color="#171717" />
+              <Pressable style={[styles.editProfileCountryBtn, { backgroundColor: ui.softBg }]} onPress={() => setCountryPickerVisible(true)}>
+                <Text style={[styles.editProfileCountryText, { color: ui.text }]}>{countryCode}</Text>
+                <Ionicons name="chevron-down" size={16} color={ui.text} />
               </Pressable>
               <TextInput
-                style={[styles.editProfileInput, styles.editProfilePhoneInput]}
+                style={[styles.editProfileInput, styles.editProfilePhoneInput, { backgroundColor: ui.softBg, color: ui.text }]}
                 value={editingPhone}
                 onChangeText={setEditingPhone}
                 placeholder="6895312"
-                placeholderTextColor="#b0b0b0"
+                placeholderTextColor={ui.placeholder}
                 keyboardType="phone-pad"
               />
             </View>
-            <Text style={styles.editProfileHint}>
+            <Text style={[styles.editProfileHint, { color: ui.textMuted }]}>
               Valid mobile or landline for your country. Saved as E.164. Each number can only be linked once on this device.
             </Text>
           </View>
@@ -1291,16 +1549,16 @@ export default function MainScreen() {
         <Modal visible={countryPickerVisible} animationType="fade" transparent statusBarTranslucent>
           <View style={styles.editProfilePickerOverlay}>
             <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setCountryPickerVisible(false)} />
-            <View style={styles.editProfilePickerSheet}>
-              <Text style={styles.editProfilePickerTitle}>Country code</Text>
+            <View style={[styles.editProfilePickerSheet, { backgroundColor: ui.cardBg }]}>
+              <Text style={[styles.editProfilePickerTitle, { color: ui.text }]}>Country code</Text>
               {countryCodes.map(({ code, label }) => (
                 <Pressable
                   key={code}
-                  style={styles.editProfilePickerRow}
+                  style={[styles.editProfilePickerRow, { borderBottomColor: ui.divider }]}
                   onPress={() => { setCountryCode(code); setCountryPickerVisible(false); }}
                 >
-                  <Text style={styles.editProfilePickerCode}>{code}</Text>
-                  <Text style={styles.editProfilePickerLabel}>{label}</Text>
+                  <Text style={[styles.editProfilePickerCode, { color: ui.text }]}>{code}</Text>
+                  <Text style={[styles.editProfilePickerLabel, { color: ui.textMuted }]}>{label}</Text>
                   {countryCode === code ? <Ionicons name="checkmark" size={20} color="#22c55e" /> : <View style={{ width: 20 }} />}
                 </Pressable>
               ))}
@@ -1339,7 +1597,7 @@ export default function MainScreen() {
   // ────────────────────────────────────────────────────────────────
 
   return (
-    <View key={ANIMATION_TREE_KEY} style={[styles.safeArea, { backgroundColor: colors.background }]}>
+      <View key={ANIMATION_TREE_KEY} style={[styles.safeArea, { backgroundColor: ui.screenBg }]}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} translucent={Platform.OS === 'android'} />
 
       {/* Map: short when sheet is up, full screen when sheet is lowered */}
@@ -1364,8 +1622,15 @@ export default function MainScreen() {
             <>
               <Polyline
                 coordinates={roadRouteCoords}
-                strokeColor="#2f76c8"
-                strokeWidth={4}
+                strokeColor="rgba(255,255,255,0.95)"
+                strokeWidth={9}
+                lineCap="round"
+                lineJoin="round"
+              />
+              <Polyline
+                coordinates={roadRouteCoords}
+                strokeColor="#171717"
+                strokeWidth={6}
                 lineCap="round"
                 lineJoin="round"
               />
@@ -1375,6 +1640,13 @@ export default function MainScreen() {
               <Marker coordinate={dropoffCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
                 <View style={styles.mapMarkerDropoff} />
               </Marker>
+              {routeAnimatorPoint ? (
+                <Marker coordinate={routeAnimatorPoint} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={styles.routeAnimatorOuter}>
+                    <View style={styles.routeAnimatorInner} />
+                  </View>
+                </Marker>
+              ) : null}
             </>
           ) : showPickupPoint ? (
             <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
@@ -1421,8 +1693,15 @@ export default function MainScreen() {
               <>
                 <Polyline
                   coordinates={roadRouteCoords}
-                  strokeColor="#2f76c8"
-                  strokeWidth={4}
+                  strokeColor="rgba(255,255,255,0.95)"
+                  strokeWidth={9}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+                <Polyline
+                  coordinates={roadRouteCoords}
+                  strokeColor="#171717"
+                  strokeWidth={6}
                   lineCap="round"
                   lineJoin="round"
                 />
@@ -1432,6 +1711,13 @@ export default function MainScreen() {
                 <Marker coordinate={dropoffCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
                   <View style={styles.mapMarkerDropoff} />
                 </Marker>
+                {routeAnimatorPoint ? (
+                  <Marker coordinate={routeAnimatorPoint} anchor={{ x: 0.5, y: 0.5 }}>
+                    <View style={styles.routeAnimatorOuter}>
+                      <View style={styles.routeAnimatorInner} />
+                    </View>
+                  </Marker>
+                ) : null}
               </>
             ) : showPickupPoint ? (
               <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
@@ -1446,19 +1732,19 @@ export default function MainScreen() {
       </Modal>
 
       {/* Header — floats over map */}
-      <View style={styles.fixedHeader}>
+      <View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay }]}>
         <View style={styles.headerRow}>
           <View style={styles.profileBlock}>
-            <Pressable style={styles.profileIconShell} onPress={openProfile}>
-              <ProfileIcon size={PROFILE_HEADER_ICON_GLYPH} />
+            <Pressable style={[styles.profileIconShell, { backgroundColor: ui.softBg }]} onPress={openProfile}>
+              <ProfileIcon size={PROFILE_HEADER_ICON_GLYPH} color={ui.text} />
             </Pressable>
             <View style={styles.profileLabels}>
-              <Text style={styles.greeting}>Good morning</Text>
-              <Text style={styles.userName}>{displayName}</Text>
+              <Text style={[styles.greeting, { color: ui.textMuted }]}>Good morning</Text>
+              <Text style={[styles.userName, { color: ui.text }]}>{displayName}</Text>
             </View>
           </View>
-          <Pressable style={styles.supportButton} onPress={() => setSupportVisible(true)}>
-            <SupportIcon />
+          <Pressable style={[styles.supportButton, { backgroundColor: isDark ? '#2b2b31' : '#171717' }]} onPress={() => setSupportVisible(true)}>
+            <SupportIcon color={isDark ? ui.text : '#ffffff'} />
           </Pressable>
         </View>
       </View>
@@ -1528,6 +1814,7 @@ export default function MainScreen() {
       <Animated.View
         style={[
           styles.contentScroll,
+          { backgroundColor: ui.panelBg },
           {
             transform: [
               {
@@ -1554,19 +1841,20 @@ export default function MainScreen() {
         </View>
 
         {/* Destination Input Card */}
-        <View style={styles.destinationCard}>
-          <View style={styles.destinationSearchGroup}>
+        <View style={[styles.destinationCard, { backgroundColor: ui.cardBg }]}>
+          <View style={[styles.destinationSearchGroup, { backgroundColor: ui.softBg }]}>
             <View
               style={[
                 styles.whereToRow,
                 styles.whereToRowTop,
                 toFocused ? styles.whereToRowActive : null,
+                { backgroundColor: isDark ? '#22242a' : undefined },
               ]}
             >
-              <Ionicons name="location-outline" size={18} color={toFocused ? '#171717' : '#999999'} />
+              <Ionicons name="location-outline" size={18} color={toFocused ? ui.text : ui.textMuted} />
               <TextInput
                 ref={toInputRef}
-                style={styles.whereToInput}
+                style={[styles.whereToInput, { color: ui.text }]}
                 value={toQuery}
                 onChangeText={(t) => {
                   setToUserEdited(true);
@@ -1575,7 +1863,7 @@ export default function MainScreen() {
                 onFocus={handleToFocus}
                 onBlur={handleToBlur}
                 placeholder="From where?"
-                placeholderTextColor="#aaaaaa"
+                placeholderTextColor={ui.placeholder}
                 returnKeyType="search"
                 autoCorrect={false}
                 autoCapitalize="words"
@@ -1587,24 +1875,25 @@ export default function MainScreen() {
                 styles.whereToRow,
                 styles.whereToRowBottom,
                 destinationFocused ? styles.whereToRowActive : null,
+                { backgroundColor: isDark ? '#22242a' : undefined },
               ]}
             >
-              <Ionicons name="search" size={18} color={destinationFocused ? '#171717' : '#999999'} />
+              <Ionicons name="search" size={18} color={destinationFocused ? ui.text : ui.textMuted} />
               <TextInput
                 ref={destinationInputRef}
-                style={styles.whereToInput}
+                style={[styles.whereToInput, { color: ui.text }]}
                 value={destinationQuery}
                 onChangeText={setDestinationQuery}
                 onFocus={handleDestinationFocus}
                 onBlur={handleDestinationBlur}
                 placeholder="Where to?"
-                placeholderTextColor="#aaaaaa"
+                placeholderTextColor={ui.placeholder}
                 returnKeyType="search"
                 autoCorrect={false}
                 autoCapitalize="words"
               />
-              <View style={styles.nowBadge}>
-                <Text style={styles.nowText}>Go ▾</Text>
+              <View style={[styles.nowBadge, { backgroundColor: ui.ctaBg }]}>
+                <Text style={[styles.nowText, { color: ui.ctaText }]}>Go ▾</Text>
               </View>
             </View>
           </View>
@@ -1614,66 +1903,66 @@ export default function MainScreen() {
           ) : null}
 
           {toFocused && filteredToSuggestions.length > 0 ? (
-            <View style={styles.suggestionList}>
+            <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {filteredToSuggestions.map((item, index) => (
                 <View key={item.id}>
                   <Pressable style={styles.suggestionItem} onPress={() => selectTo(item.title)}>
-                    <View style={styles.suggestionIconWrap}>
-                      <Ionicons name={item.icon} size={16} color="#171717" />
+                    <View style={[styles.suggestionIconWrap, { backgroundColor: ui.softBg }]}>
+                      <Ionicons name={item.icon} size={16} color={ui.text} />
                     </View>
                     <View style={styles.suggestionTextBlock}>
-                      <Text style={styles.suggestionTitle}>{item.title}</Text>
-                      <Text style={styles.suggestionSubtitle} numberOfLines={1}>{item.subtitle}</Text>
+                      <Text style={[styles.suggestionTitle, { color: ui.text }]}>{item.title}</Text>
+                      <Text style={[styles.suggestionSubtitle, { color: ui.textMuted }]} numberOfLines={1}>{item.subtitle}</Text>
                     </View>
-                    <Ionicons name="arrow-up-outline" size={16} color="#b2b2b2" style={styles.suggestionActionIcon} />
+                    <Ionicons name="arrow-up-outline" size={16} color={ui.placeholder} style={styles.suggestionActionIcon} />
                   </Pressable>
-                  {index < filteredToSuggestions.length - 1 ? <View style={styles.suggestionDivider} /> : null}
+                  {index < filteredToSuggestions.length - 1 ? <View style={[styles.suggestionDivider, { backgroundColor: ui.divider }]} /> : null}
                 </View>
               ))}
             </View>
           ) : null}
 
           {destinationFocused && filteredSuggestions.length > 0 ? (
-            <View style={styles.suggestionList}>
+            <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {filteredSuggestions.map((item, index) => (
                 <View key={item.id}>
                   <Pressable style={styles.suggestionItem} onPress={() => selectDestination(item.title)}>
-                    <View style={styles.suggestionIconWrap}>
-                      <Ionicons name={item.icon} size={16} color="#171717" />
+                    <View style={[styles.suggestionIconWrap, { backgroundColor: ui.softBg }]}>
+                      <Ionicons name={item.icon} size={16} color={ui.text} />
                     </View>
                     <View style={styles.suggestionTextBlock}>
-                      <Text style={styles.suggestionTitle}>{item.title}</Text>
-                      <Text style={styles.suggestionSubtitle} numberOfLines={1}>{item.subtitle}</Text>
+                      <Text style={[styles.suggestionTitle, { color: ui.text }]}>{item.title}</Text>
+                      <Text style={[styles.suggestionSubtitle, { color: ui.textMuted }]} numberOfLines={1}>{item.subtitle}</Text>
                     </View>
-                    <Ionicons name="arrow-up-outline" size={16} color="#b2b2b2" style={styles.suggestionActionIcon} />
+                    <Ionicons name="arrow-up-outline" size={16} color={ui.placeholder} style={styles.suggestionActionIcon} />
                   </Pressable>
-                  {index < filteredSuggestions.length - 1 ? <View style={styles.suggestionDivider} /> : null}
+                  {index < filteredSuggestions.length - 1 ? <View style={[styles.suggestionDivider, { backgroundColor: ui.divider }]} /> : null}
                 </View>
               ))}
             </View>
           ) : null}
 
-          {!destinationFocused && !toFocused ? <View style={styles.addressList}>
+          {!destinationFocused && !toFocused ? <View style={[styles.addressList, { backgroundColor: ui.cardBg }]}>
             <Pressable style={styles.addressItem} onPress={() => openAddress('home')}>
-              <View style={styles.addressIconHome}>
-                <Ionicons name="home" size={14} color="#171717" />
+              <View style={[styles.addressIconHome, { backgroundColor: isDark ? '#2b2b31' : undefined }]}>
+                <Ionicons name="home" size={14} color={ui.text} />
               </View>
               <View style={styles.addressTextBlock}>
-                <Text style={styles.addressLabel}>Home</Text>
-                <Text style={styles.addressSub} numberOfLines={1}>{homeAddress || 'Add address'}</Text>
+                <Text style={[styles.addressLabel, { color: ui.text }]}>Home</Text>
+                <Text style={[styles.addressSub, { color: ui.textMuted }]} numberOfLines={1}>{homeAddress || 'Add address'}</Text>
               </View>
-              <Ionicons name={homeAddress ? 'pencil' : 'add-circle-outline'} size={18} color="#aaaaaa" />
+              <Ionicons name={homeAddress ? 'pencil' : 'add-circle-outline'} size={18} color={ui.placeholder} />
             </Pressable>
-            <View style={styles.addressDivider} />
+            <View style={[styles.addressDivider, { backgroundColor: ui.divider }]} />
             <Pressable style={styles.addressItem} onPress={() => openAddress('work')}>
-              <View style={styles.addressIconWork}>
-                <Ionicons name="briefcase" size={14} color="#171717" />
+              <View style={[styles.addressIconWork, { backgroundColor: isDark ? '#2b2b31' : undefined }]}>
+                <Ionicons name="briefcase" size={14} color={ui.text} />
               </View>
               <View style={styles.addressTextBlock}>
-                <Text style={styles.addressLabel}>Work</Text>
-                <Text style={styles.addressSub} numberOfLines={1}>{workAddress || 'Add address'}</Text>
+                <Text style={[styles.addressLabel, { color: ui.text }]}>Work</Text>
+                <Text style={[styles.addressSub, { color: ui.textMuted }]} numberOfLines={1}>{workAddress || 'Add address'}</Text>
               </View>
-              <Ionicons name={workAddress ? 'pencil' : 'add-circle-outline'} size={18} color="#aaaaaa" />
+              <Ionicons name={workAddress ? 'pencil' : 'add-circle-outline'} size={18} color={ui.placeholder} />
             </Pressable>
           </View> : null}
         </View>
@@ -1693,7 +1982,16 @@ export default function MainScreen() {
               <Pressable
                 key={id}
                 disabled={disabled}
-                style={[styles.serviceCard, active && styles.serviceCardActive, disabled && styles.serviceCardDisabled]}
+                style={[
+                  styles.serviceCard,
+                  { backgroundColor: isDark ? '#1b1c20' : undefined, borderColor: isDark ? '#2b2b31' : undefined },
+                  active && styles.serviceCardActive,
+                  active && isDark ? { borderColor: '#ffffff', borderWidth: 2.5 } : null,
+                  disabled && styles.serviceCardDisabled,
+                  disabled && isDark
+                    ? { opacity: 0.88, backgroundColor: '#24262c', borderColor: '#3a3d45' }
+                    : null,
+                ]}
                 onPress={() => {
                   if (!disabled) setSelectedRide(id);
                 }}
@@ -1701,22 +1999,22 @@ export default function MainScreen() {
                 <View style={styles.serviceCarImageWrap}>
                   <Image source={greyCarAsset} style={styles.serviceCarImage} resizeMode="contain" />
                 </View>
-                <View style={[styles.serviceDiscountPill, active && styles.serviceDiscountPillActive, disabled && styles.serviceDiscountPillDisabled]}>
-                  <Text style={[styles.serviceDiscountText, active && styles.serviceDiscountTextActive, disabled && styles.serviceDiscountTextDisabled]}>
+                <View style={[styles.serviceDiscountPill, active && styles.serviceDiscountPillActive, disabled && styles.serviceDiscountPillDisabled, disabled && isDark ? { backgroundColor: '#2f3138' } : null]}>
+                  <Text style={[styles.serviceDiscountText, active && styles.serviceDiscountTextActive, disabled && styles.serviceDiscountTextDisabled, disabled && isDark ? { color: '#aeb3bf' } : null]}>
                     {discount} OFF
                   </Text>
                 </View>
-                <Text style={[styles.serviceTitle, active && styles.serviceTitleActive, disabled && styles.serviceTitleDisabled]}>{label}</Text>
-                <Text style={[styles.serviceSubLabel, active && styles.serviceSubLabelActive, disabled && styles.serviceSubLabelDisabled]}>{sub}</Text>
+                <Text style={[styles.serviceTitle, { color: isDark && !active ? ui.text : undefined }, active && styles.serviceTitleActive, disabled && styles.serviceTitleDisabled]}>{label}</Text>
+                <Text style={[styles.serviceSubLabel, { color: isDark && !active ? ui.textMuted : undefined }, active && styles.serviceSubLabelActive, disabled && styles.serviceSubLabelDisabled]}>{sub}</Text>
               </Pressable>
             );
           })}
         </View>
 
         {/* Promotional Card */}
-        <View style={styles.promoCard}>
+        <View style={[styles.promoCard, { backgroundColor: isDark ? '#151517' : undefined }]}>
           <View style={styles.promoContent}>
-            <Text style={styles.promoTitle}>Invest today. Secure a{'\n'}healthy tomorrow &{'\n'}every day.</Text>
+            <Text style={[styles.promoTitle, { color: isDark ? ui.text : undefined }]}>Invest today. Secure a{'\n'}healthy tomorrow &{'\n'}every day.</Text>
             <Pressable style={styles.promoButton}>
               <Text style={styles.promoButtonText}>Invest Now!</Text>
             </Pressable>
@@ -1731,25 +2029,25 @@ export default function MainScreen() {
       </Animated.View>
 
       {/* Bottom Navigation Tab Bar */}
-      <BlurView intensity={80} tint={isDark ? "dark" : "light"} style={styles.tabBar}>
+      <BlurView intensity={80} tint={isDark ? "dark" : "light"} style={[styles.tabBar, { backgroundColor: isDark ? 'rgba(24,24,28,0.88)' : 'rgba(255,255,255,0.82)' }]}>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('home')}>
-          <Ionicons name={activeTab === 'home' ? 'home' : 'home-outline'} size={24} color={activeTab === 'home' ? '#1a1a1a' : '#aaaaaa'} />
-          <Text style={[styles.tabLabel, activeTab === 'home' && styles.tabLabelActive]}>Home</Text>
+          <Ionicons name={activeTab === 'home' ? 'home' : 'home-outline'} size={24} color={activeTab === 'home' ? ui.tabActive : ui.tabInactive} />
+          <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'home' && styles.tabLabelActive, activeTab === 'home' ? { color: ui.tabActive } : null]}>Home</Text>
         </Pressable>
 
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('activity')}>
-          <Ionicons name={activeTab === 'activity' ? 'time' : 'time-outline'} size={24} color={activeTab === 'activity' ? '#1a1a1a' : '#aaaaaa'} />
-          <Text style={[styles.tabLabel, activeTab === 'activity' && styles.tabLabelActive]}>Activity</Text>
+          <Ionicons name={activeTab === 'activity' ? 'time' : 'time-outline'} size={24} color={activeTab === 'activity' ? ui.tabActive : ui.tabInactive} />
+          <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'activity' && styles.tabLabelActive, activeTab === 'activity' ? { color: ui.tabActive } : null]}>Activity</Text>
         </Pressable>
 
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('notifications')}>
-          <Ionicons name={activeTab === 'notifications' ? 'heart' : 'heart-outline'} size={24} color={activeTab === 'notifications' ? '#1a1a1a' : '#aaaaaa'} />
-          <Text style={[styles.tabLabel, activeTab === 'notifications' && styles.tabLabelActive]}>Favourites</Text>
+          <Ionicons name={activeTab === 'notifications' ? 'heart' : 'heart-outline'} size={24} color={activeTab === 'notifications' ? ui.tabActive : ui.tabInactive} />
+          <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'notifications' && styles.tabLabelActive, activeTab === 'notifications' ? { color: ui.tabActive } : null]}>Favourites</Text>
         </Pressable>
 
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('settings')}>
-          <Ionicons name={activeTab === 'settings' ? 'settings' : 'settings-outline'} size={24} color={activeTab === 'settings' ? '#1a1a1a' : '#aaaaaa'} />
-          <Text style={[styles.tabLabel, activeTab === 'settings' && styles.tabLabelActive]}>Settings</Text>
+          <Ionicons name={activeTab === 'settings' ? 'settings' : 'settings-outline'} size={24} color={activeTab === 'settings' ? ui.tabActive : ui.tabInactive} />
+          <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'settings' && styles.tabLabelActive, activeTab === 'settings' ? { color: ui.tabActive } : null]}>Settings</Text>
         </Pressable>
       </BlurView>
     </View>
@@ -1934,6 +2232,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffd54a',
     borderWidth: 5,
     borderColor: '#171717',
+  },
+  routeAnimatorOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#171717',
+  },
+  routeAnimatorInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#171717',
   },
   mapTiltLayer: {
     position: 'absolute',
