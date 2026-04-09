@@ -1,6 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Animated, Dimensions, Image, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  Dimensions,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  PanResponder,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,8 +23,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 
 import { authEnabled, firebaseApp, firebaseReady, missingFirebaseConfig } from './src/lib/firebase';
+import {
+  formatE164International,
+  migrateLegacyNational,
+  releaseE164,
+  reserveE164,
+  validateToE164,
+} from './src/lib/phone';
 
 const carMarkerAsset = require('./assets/car-marker.png');
+const addCardPreviewAsset = require('./assets/master_card.png');
 
 const rideOptions = [
   {
@@ -70,6 +93,17 @@ const MAP_HEIGHT = 400;
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const ANIMATION_TREE_KEY = 'animation-tree-v2';
 
+type ProfileCard = {
+  id: string;
+  type: 'visa' | 'mastercard';
+  last4: string;
+  label: string;
+};
+
+const DEFAULT_PROFILE_CARDS: ProfileCard[] = [
+  { id: '1', type: 'visa', last4: '4242', label: 'Prepaid Visa' },
+  { id: '2', type: 'mastercard', last4: '8888', label: 'Ridr Mastercard' },
+];
 
 // Header notifications icon
 function SupportIcon() {
@@ -78,14 +112,9 @@ function SupportIcon() {
   );
 }
 
-// Profile Icon component
+// Profile avatar button — user icon
 function ProfileIcon() {
-  return (
-    <View style={styles.profileIcon}>
-      <View style={styles.profileHead} />
-      <View style={styles.profileBody} />
-    </View>
-  );
+  return <Ionicons name="person" size={28} color="#171717" />;
 }
 
 // Tab icons use Ionicons (from @expo/vector-icons)
@@ -93,27 +122,27 @@ function ProfileIcon() {
 export default function App() {
   const [selectedRide, setSelectedRide] = useState('ride');
   const [activeTab, setActiveTab] = useState('home');
-  const [screen, setScreen] = useState<'home' | 'profile'>('home');
+  const [screen, setScreen] = useState<'home' | 'profile' | 'profileEdit'>('home');
   const [mapExpanded, setMapExpanded] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   // Profile
-  const [userName, setUserName] = useState('Sarah');
-  const [editingName, setEditingName] = useState('');
+  const [userFirstName, setUserFirstName] = useState('Sarah');
+  const [userLastName, setUserLastName] = useState('');
+  const [editingFirstName, setEditingFirstName] = useState('');
+  const [editingLastName, setEditingLastName] = useState('');
   const [editingPhone, setEditingPhone] = useState('');
   const [editingEmail, setEditingEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
+  const [userPhoneE164, setUserPhoneE164] = useState<string | null>(null);
+  const [userCountryCode, setUserCountryCode] = useState('+1876');
   const [userEmail, setUserEmail] = useState('');
-  const [activeField, setActiveField] = useState<'name'|'phone'|'email'|null>(null);
-
-  // Payments
-  const [cards] = useState([
-    { id: '1', type: 'visa',       last4: '4242', label: 'Personal Visa' },
-    { id: '2', type: 'mastercard', last4: '8888', label: 'Work Mastercard' },
-  ]);
-  const [defaultCard, setDefaultCard] = useState('1');
-  const [applePayEnabled, setApplePayEnabled] = useState(false);
-  const [cashEnabled, setCashEnabled] = useState(true);
+  const [userUsername, setUserUsername] = useState('');
+  const [editingUsername, setEditingUsername] = useState('');
+  const [editingPassword, setEditingPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [countryCode, setCountryCode] = useState('+1876');
+  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
 
   // Addresses
   const [homeAddress, setHomeAddress] = useState('');
@@ -127,20 +156,89 @@ export default function App() {
   // Support modal
   const [supportVisible, setSupportVisible] = useState(false);
 
+  // Payment cards (shown on profile)
+  const [cards, setCards] = useState<ProfileCard[]>(DEFAULT_PROFILE_CARDS);
+  const [defaultCard, setDefaultCard] = useState('1');
+  const [addCardVisible, setAddCardVisible] = useState(false);
+  const [newCardNumber, setNewCardNumber] = useState('');
+  const [newCardName, setNewCardName] = useState('');
+  const [newCardExpiry, setNewCardExpiry] = useState('');
+  const [newCardCvv, setNewCardCvv] = useState('');
+
   useEffect(() => {
     (async () => {
-      const [savedName, savedHome, savedWork, savedPhone, savedEmail] = await Promise.all([
+      const [
+        savedFirst,
+        savedLast,
+        savedName,
+        savedHome,
+        savedWork,
+        savedPhone,
+        savedE164FromStorage,
+        savedEmail,
+        savedUsername,
+        savedCountry,
+        savedCardsJson,
+      ] = await Promise.all([
+        AsyncStorage.getItem('profile_first_name'),
+        AsyncStorage.getItem('profile_last_name'),
         AsyncStorage.getItem('profile_name'),
         AsyncStorage.getItem('address_home'),
         AsyncStorage.getItem('address_work'),
         AsyncStorage.getItem('profile_phone'),
+        AsyncStorage.getItem('profile_phone_e164'),
         AsyncStorage.getItem('profile_email'),
+        AsyncStorage.getItem('profile_username'),
+        AsyncStorage.getItem('profile_country_code'),
+        AsyncStorage.getItem('profile_cards'),
       ]);
-      if (savedName) setUserName(savedName);
+      if (savedFirst !== null) {
+        setUserFirstName(savedFirst);
+      } else if (savedName) {
+        const p = savedName.trim().split(/\s+/);
+        setUserFirstName(p[0] || 'Sarah');
+      }
+      if (savedLast !== null) {
+        setUserLastName(savedLast);
+      } else if (savedName && savedFirst === null) {
+        const p = savedName.trim().split(/\s+/);
+        setUserLastName(p.slice(1).join(' ') || '');
+      }
       if (savedHome) setHomeAddress(savedHome);
       if (savedWork) setWorkAddress(savedWork);
-      if (savedPhone) setUserPhone(savedPhone);
+      const country = savedCountry || '+1876';
+      setCountryCode(country);
+      setUserCountryCode(country);
+      if (savedPhone) {
+        const nat = migrateLegacyNational(savedPhone, country);
+        setUserPhone(nat);
+      }
       if (savedEmail) setUserEmail(savedEmail);
+      if (savedUsername) setUserUsername(savedUsername);
+
+      if (savedE164FromStorage) {
+        setUserPhoneE164(savedE164FromStorage);
+      } else if (savedPhone) {
+        const nat = migrateLegacyNational(savedPhone, country);
+        const v = validateToE164(country, nat);
+        if (v.ok) {
+          setUserPhoneE164(v.e164);
+          await AsyncStorage.setItem('profile_phone_e164', v.e164);
+        }
+      }
+
+      if (savedCardsJson) {
+        try {
+          const parsed = JSON.parse(savedCardsJson) as ProfileCard[];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setCards(parsed);
+            const defId = await AsyncStorage.getItem('profile_default_card');
+            setDefaultCard(defId && parsed.some(c => c.id === defId) ? defId : parsed[0].id);
+          }
+        } catch {
+          /* keep default */
+        }
+      }
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
@@ -162,32 +260,165 @@ export default function App() {
     setAddressInput('');
   };
 
+  const displayName = `${userFirstName} ${userLastName}`.trim() || userFirstName;
+
   const saveProfile = async () => {
-    const name = editingName.trim();
-    const phone = editingPhone.trim();
+    const first = editingFirstName.trim();
+    const last = editingLastName.trim();
+    const natDigits = editingPhone.replace(/\D/g, '');
     const email = editingEmail.trim();
-    if (name) { setUserName(name); await AsyncStorage.setItem('profile_name', name); }
-    if (phone !== userPhone) { setUserPhone(phone); await AsyncStorage.setItem('profile_phone', phone); }
-    if (email !== userEmail) { setUserEmail(email); await AsyncStorage.setItem('profile_email', email); }
-    setActiveField(null);
-    setScreen('home');
-  };
+    const username = editingUsername.trim();
 
-  const profileDirty =
-    editingName.trim() !== userName ||
-    editingPhone.trim() !== userPhone ||
-    editingEmail.trim() !== userEmail;
+    setUserFirstName(first);
+    setUserLastName(last);
+    await AsyncStorage.setItem('profile_first_name', first);
+    await AsyncStorage.setItem('profile_last_name', last);
+    await AsyncStorage.setItem('profile_name', `${first} ${last}`.trim());
 
-  const openProfile = () => {
-    setEditingName(userName);
-    setEditingPhone(userPhone);
-    setEditingEmail(userEmail);
+    if (!natDigits) {
+      if (userPhoneE164) await releaseE164(userPhoneE164);
+      setUserPhone('');
+      setUserPhoneE164(null);
+      setUserCountryCode(countryCode);
+      await AsyncStorage.removeItem('profile_phone_e164');
+      await AsyncStorage.setItem('profile_phone', '');
+      await AsyncStorage.setItem('profile_country_code', countryCode);
+    } else {
+      const phoneResult = validateToE164(countryCode, natDigits);
+      if (!phoneResult.ok) {
+        Alert.alert('Phone number', phoneResult.error);
+        return;
+      }
+
+      const reserved = await reserveE164(phoneResult.e164, userPhoneE164);
+      if (!reserved.ok) {
+        Alert.alert('Phone number', reserved.error);
+        return;
+      }
+
+      setUserPhone(natDigits);
+      setUserPhoneE164(phoneResult.e164);
+      setUserCountryCode(countryCode);
+      await AsyncStorage.setItem('profile_phone', natDigits);
+      await AsyncStorage.setItem('profile_phone_e164', phoneResult.e164);
+      await AsyncStorage.setItem('profile_country_code', countryCode);
+    }
+
+    setUserEmail(email);
+    await AsyncStorage.setItem('profile_email', email);
+    setUserUsername(username);
+    await AsyncStorage.setItem('profile_username', username);
+    setEditingPassword('');
     setScreen('profile');
   };
+
+  const phoneDirty = (() => {
+    const natEdit = editingPhone.replace(/\D/g, '');
+    const natUser = userPhone.replace(/\D/g, '');
+    if (countryCode !== userCountryCode) return true;
+    if (natEdit !== natUser) return true;
+    if (!natEdit && !userPhoneE164) return false;
+    if (!natEdit && userPhoneE164) return true;
+    const r = validateToE164(countryCode, natEdit);
+    if (!r.ok) return natEdit.length > 0;
+    return r.e164 !== userPhoneE164;
+  })();
+
+  const profileDirty =
+    editingFirstName.trim() !== userFirstName ||
+    editingLastName.trim() !== userLastName ||
+    phoneDirty ||
+    editingEmail.trim() !== userEmail ||
+    editingUsername.trim() !== userUsername ||
+    editingPassword.length > 0;
+
+  const syncEditingFromUser = () => {
+    setEditingFirstName(userFirstName);
+    setEditingLastName(userLastName);
+    setEditingPhone(userPhone);
+    setCountryCode(userCountryCode);
+    setEditingEmail(userEmail);
+    setEditingUsername(userUsername);
+    setEditingPassword('');
+  };
+
+  const openProfile = () => {
+    syncEditingFromUser();
+    setScreen('profile');
+  };
+
+  const openProfileEdit = () => {
+    syncEditingFromUser();
+    setScreen('profileEdit');
+  };
+
+  const onResetPassword = () => {
+    const email = userEmail.trim();
+    if (!email) {
+      Alert.alert(
+        'Reset password',
+        'Add an email in your profile first, then try again.',
+        [{ text: 'OK' }],
+      );
+      return;
+    }
+    Alert.alert(
+      'Reset password',
+      `We will send a reset link to ${email}.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Send link', onPress: () => {} },
+      ],
+    );
+  };
+
+  const countryCodes = [
+    { code: '+1876', label: 'Jamaica' },
+    { code: '+1', label: 'US / CA' },
+    { code: '+44', label: 'UK' },
+    { code: '+91', label: 'India' },
+  ];
 
   const openAddress = (type: 'home' | 'work') => {
     setAddressInput(type === 'home' ? homeAddress : workAddress);
     setAddressModal(type);
+  };
+
+  const closeAddCardSheet = () => {
+    setAddCardVisible(false);
+    setNewCardNumber('');
+    setNewCardName('');
+    setNewCardExpiry('');
+    setNewCardCvv('');
+  };
+
+  const saveNewCard = async () => {
+    const digits = newCardNumber.replace(/\D/g, '');
+    if (digits.length < 13 || digits.length > 19) {
+      Alert.alert('Invalid card number', 'Enter the full number on your card.');
+      return;
+    }
+    const exp = newCardExpiry.trim();
+    if (!/^\d{2}\/\d{2}$/.test(exp)) {
+      Alert.alert('Invalid expiry', 'Use MM/YY (e.g. 08/27).');
+      return;
+    }
+    const cvv = newCardCvv.replace(/\D/g, '');
+    if (cvv.length < 3 || cvv.length > 4) {
+      Alert.alert('Invalid CVV', 'Enter the 3 or 4 digit security code.');
+      return;
+    }
+    const last4 = digits.slice(-4);
+    const first = digits[0];
+    const type: 'visa' | 'mastercard' = first === '5' ? 'mastercard' : 'visa';
+    const label = newCardName.trim() || `Card •••• ${last4}`;
+    const id = `c_${Date.now()}`;
+    const next: ProfileCard[] = [...cards, { id, type, last4, label }];
+    setCards(next);
+    setDefaultCard(id);
+    await AsyncStorage.setItem('profile_cards', JSON.stringify(next));
+    await AsyncStorage.setItem('profile_default_card', id);
+    closeAddCardSheet();
   };
 
   const mapCenter = userLocation ?? JAMAICA_KINGSTON;
@@ -288,216 +519,346 @@ export default function App() {
     outputRange: [0, -(MAP_HEIGHT - 118)],
   });
 
-  // ── Profile Screen ──────────────────────────────────────────────
+  // ── Profile (read-only) ─────────────────────────────────────────
   if (screen === 'profile') {
     return (
-      <View style={styles.safeArea}>
+      <View style={styles.editProfileRoot}>
         <StatusBar style="dark" />
-        <View style={styles.profileScreenHeader}>
-          <Pressable style={styles.profileScreenBack} onPress={() => setScreen('home')}>
-            <Ionicons name="arrow-back" size={22} color="#171717" />
+        <View style={styles.editProfileHeader}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color="#171717" />
           </Pressable>
-          <Text style={styles.profileScreenTitle}>My Profile</Text>
-          {profileDirty ? (
-            <Pressable style={styles.profileHeaderSaveBtn} onPress={saveProfile}>
-              <Text style={styles.profileHeaderSaveBtnText}>Save</Text>
-            </Pressable>
-          ) : (
-            <View style={{ width: 58 }} />
-          )}
+          <Text style={styles.editProfileHeaderTitle}>Profile</Text>
+          <Pressable style={styles.editProfileHeaderSide} onPress={openProfileEdit} hitSlop={8}>
+            <Ionicons name="pencil" size={22} color="#171717" />
+          </Pressable>
         </View>
 
-        <ScrollView style={{ flex: 1, backgroundColor: '#f5f5f5' }} contentContainerStyle={styles.profileScreenContent} showsVerticalScrollIndicator={false}>
-          {/* Avatar */}
-          <View style={styles.profileAvatarWrap}>
-            <View style={styles.profileAvatarLarge}>
-              <ProfileIcon />
-            </View>
-            <Pressable style={styles.profileAvatarEdit}>
-              <Ionicons name="camera" size={16} color="#171717" />
-            </Pressable>
-          </View>
-
-          {/* Personal Info */}
-          <View style={styles.profileFieldGroup}>
-            <Text style={styles.profileFieldGroupLabel}>Personal Info</Text>
-
-            {/* Name */}
-            <View style={styles.profileFieldRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profileFieldLabel}>Full Name</Text>
-                <TextInput
-                  style={[styles.profileFieldInput, activeField === 'name' && styles.profileFieldInputActive]}
-                  value={editingName}
-                  onChangeText={setEditingName}
-                  onFocus={() => setActiveField('name')}
-                  placeholder="Your full name"
-                  placeholderTextColor="#aaa"
-                  autoCapitalize="words"
-                  editable={activeField === 'name'}
-                />
-              </View>
-              <Pressable onPress={() => setActiveField(activeField === 'name' ? null : 'name')} style={styles.profileFieldIcon}>
-                <Ionicons
-                  name={activeField === 'name' ? 'checkmark-circle' : 'pencil'}
-                  size={20}
-                  color={activeField === 'name' ? '#ffd54a' : '#cccccc'}
-                />
-              </Pressable>
-            </View>
-            <View style={styles.profileFieldDivider} />
-
-            {/* Phone */}
-            <View style={styles.profileFieldRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profileFieldLabel}>Phone</Text>
-                <TextInput
-                  style={[styles.profileFieldInput, activeField === 'phone' && styles.profileFieldInputActive]}
-                  value={editingPhone}
-                  onChangeText={setEditingPhone}
-                  onFocus={() => setActiveField('phone')}
-                  placeholder="+1 876 000 0000"
-                  placeholderTextColor="#aaa"
-                  keyboardType="phone-pad"
-                  editable={activeField === 'phone'}
-                />
-              </View>
-              <Pressable onPress={() => setActiveField(activeField === 'phone' ? null : 'phone')} style={styles.profileFieldIcon}>
-                <Ionicons
-                  name={activeField === 'phone' ? 'checkmark-circle' : 'pencil'}
-                  size={20}
-                  color={activeField === 'phone' ? '#ffd54a' : '#cccccc'}
-                />
-              </Pressable>
-            </View>
-            <View style={styles.profileFieldDivider} />
-
-            {/* Email */}
-            <View style={styles.profileFieldRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profileFieldLabel}>Email</Text>
-                <TextInput
-                  style={[styles.profileFieldInput, activeField === 'email' && styles.profileFieldInputActive]}
-                  value={editingEmail}
-                  onChangeText={setEditingEmail}
-                  onFocus={() => setActiveField('email')}
-                  placeholder="you@example.com"
-                  placeholderTextColor="#aaa"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  editable={activeField === 'email'}
-                />
-              </View>
-              <Pressable onPress={() => setActiveField(activeField === 'email' ? null : 'email')} style={styles.profileFieldIcon}>
-                <Ionicons
-                  name={activeField === 'email' ? 'checkmark-circle' : 'pencil'}
-                  size={20}
-                  color={activeField === 'email' ? '#ffd54a' : '#cccccc'}
-                />
-              </Pressable>
+        <ScrollView
+          style={styles.editProfileScroll}
+          contentContainerStyle={styles.profileViewScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.editProfileAvatarWrap}>
+            <View style={styles.editProfileAvatarImage}>
+              <Ionicons name="person" size={56} color="#8a8a8a" />
             </View>
           </View>
 
-          {/* Saved Places */}
-          <View style={styles.profileFieldGroup}>
-            <Text style={styles.profileFieldGroupLabel}>Saved Places</Text>
-            <Pressable style={styles.profilePlaceRow} onPress={() => openAddress('home')}>
-              <View style={styles.addressIconHome}>
-                <Ionicons name="home" size={15} color="#171717" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profilePlaceLabel}>Home</Text>
-                <Text style={styles.profilePlaceSub} numberOfLines={1}>{homeAddress || 'Tap to add'}</Text>
-              </View>
-              <Ionicons name={homeAddress ? 'pencil' : 'add-circle-outline'} size={20} color="#aaa" />
-            </Pressable>
-            <View style={styles.profileFieldDivider} />
-            <Pressable style={styles.profilePlaceRow} onPress={() => openAddress('work')}>
-              <View style={styles.addressIconWork}>
-                <Ionicons name="briefcase" size={15} color="#171717" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profilePlaceLabel}>Work</Text>
-                <Text style={styles.profilePlaceSub} numberOfLines={1}>{workAddress || 'Tap to add'}</Text>
-              </View>
-              <Ionicons name={workAddress ? 'pencil' : 'add-circle-outline'} size={20} color="#aaa" />
-            </Pressable>
+          <View style={styles.profileViewSectionHeadingWrap}>
+            <Text style={styles.profileViewSectionTitle}>Personal information</Text>
+          </View>
+          <View style={styles.profileViewCard}>
+            <View style={styles.profileViewRow}>
+              <Text style={styles.profileViewLabel}>First name</Text>
+              <Text style={styles.profileViewValue}>{userFirstName.trim() ? userFirstName : '—'}</Text>
+            </View>
+            <View style={styles.profileViewDivider} />
+            <View style={styles.profileViewRow}>
+              <Text style={styles.profileViewLabel}>Last name</Text>
+              <Text style={styles.profileViewValue}>{userLastName.trim() ? userLastName : '—'}</Text>
+            </View>
+            <View style={styles.profileViewDivider} />
+            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
+              <Text style={styles.profileViewLabel}>Email</Text>
+              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline]} numberOfLines={4}>
+                {userEmail.trim() ? userEmail : '—'}
+              </Text>
+            </View>
+            <View style={styles.profileViewDivider} />
+            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
+              <Text style={styles.profileViewLabel}>Phone</Text>
+              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline]} numberOfLines={3}>
+                {userPhoneE164 ? formatE164International(userPhoneE164) : '—'}
+              </Text>
+            </View>
           </View>
 
-          {/* Payments */}
-          <View style={styles.profileFieldGroup}>
-            <Text style={styles.profileFieldGroupLabel}>Payment Methods</Text>
-
+          <View style={styles.profilePaymentSectionHeader}>
+            <Text style={[styles.profileViewSectionTitle, styles.profileViewSectionTitleFlex]}>Payment methods</Text>
+            <Pressable
+              style={styles.profileAddCardIconBtn}
+              onPress={() => {
+                setNewCardNumber('');
+                setNewCardName('');
+                setNewCardExpiry('');
+                setNewCardCvv('');
+                setAddCardVisible(true);
+              }}
+              hitSlop={8}
+              accessibilityLabel="Add card"
+            >
+              <Ionicons name="add" size={20} color="#171717" />
+            </Pressable>
+          </View>
+          <View style={styles.profileViewCard}>
             {cards.map((card, i) => (
               <View key={card.id}>
-                <Pressable style={styles.paymentRow} onPress={() => setDefaultCard(card.id)}>
-                  <View style={[styles.paymentCardIcon, card.type === 'visa' ? styles.paymentCardIconVisa : styles.paymentCardIconMC]}>
-                    <Text style={styles.paymentCardIconText}>{card.type === 'visa' ? 'VISA' : 'MC'}</Text>
+                <Pressable
+                  style={styles.profilePaymentRow}
+                  onPress={() => {
+                    setDefaultCard(card.id);
+                    void AsyncStorage.setItem('profile_default_card', card.id);
+                  }}
+                >
+                  <View style={[styles.profilePaymentCardIcon, card.type === 'visa' ? styles.profilePaymentVisa : styles.profilePaymentMc]}>
+                    <Text style={styles.profilePaymentCardIconText}>{card.type === 'visa' ? 'VISA' : 'MC'}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.paymentRowLabel}>{card.label}</Text>
-                    <Text style={styles.paymentRowSub}>•••• {card.last4}</Text>
+                    <Text style={styles.profilePaymentLabel}>{card.label}</Text>
+                    <Text style={styles.profilePaymentSub}>•••• {card.last4}</Text>
                   </View>
                   {defaultCard === card.id && (
-                    <View style={styles.paymentDefaultBadge}>
-                      <Text style={styles.paymentDefaultText}>Default</Text>
+                    <View style={styles.profilePaymentDefaultBadge}>
+                      <Text style={styles.profilePaymentDefaultText}>Default</Text>
                     </View>
                   )}
                   <Ionicons
                     name={defaultCard === card.id ? 'radio-button-on' : 'radio-button-off'}
-                    size={20}
+                    size={22}
                     color={defaultCard === card.id ? '#ffd54a' : '#cccccc'}
                   />
                 </Pressable>
-                {i < cards.length - 1 && <View style={styles.profileFieldDivider} />}
+                {i < cards.length - 1 ? <View style={styles.profileViewDivider} /> : null}
               </View>
             ))}
+          </View>
 
-            <View style={styles.profileFieldDivider} />
+          <Pressable style={styles.resetPasswordButton} onPress={onResetPassword}>
+            <Text style={styles.resetPasswordButtonText}>Reset password</Text>
+          </Pressable>
+        </ScrollView>
 
-            {/* Wallets */}
-            <Pressable style={styles.paymentRow} onPress={() => setApplePayEnabled(v => !v)}>
-              <View style={[styles.paymentCardIcon, { backgroundColor: '#000' }]}>
-                <Ionicons name="logo-apple" size={16} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.paymentRowLabel}>Apple Pay</Text>
-                <Text style={styles.paymentRowSub}>{applePayEnabled ? 'Enabled' : 'Not linked'}</Text>
-              </View>
-              <View style={[styles.paymentToggle, applePayEnabled && styles.paymentToggleOn]}>
-                <View style={[styles.paymentToggleThumb, applePayEnabled && styles.paymentToggleThumbOn]} />
-              </View>
-            </Pressable>
+        <Modal visible={addCardVisible} animationType="slide" transparent statusBarTranslucent>
+          <KeyboardAvoidingView
+            style={styles.addCardKb}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.modalOverlay}>
+              <Pressable style={StyleSheet.absoluteFillObject} onPress={closeAddCardSheet} />
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.addCardScrollContent}
+              >
+                <View style={styles.addCardSheet}>
+                  <View style={styles.modalHandle} />
+                  <View style={styles.addCardPreview}>
+                    <Image
+                      source={addCardPreviewAsset}
+                      style={styles.addCardPreviewImage}
+                      resizeMode="contain"
+                    />
+                  </View>
+                  <Text style={styles.modalTitle}>Add card</Text>
+                  <Text style={styles.modalLabel}>Card number</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={newCardNumber}
+                    onChangeText={setNewCardNumber}
+                    placeholder="1234 5678 9012 3456"
+                    placeholderTextColor="#aaa"
+                    keyboardType="number-pad"
+                    autoComplete="cc-number"
+                  />
+                  <Text style={styles.modalLabel}>Name on card</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={newCardName}
+                    onChangeText={setNewCardName}
+                    placeholder="As printed on card"
+                    placeholderTextColor="#aaa"
+                    autoCapitalize="characters"
+                  />
+                  <View style={styles.addCardRow}>
+                    <View style={styles.addCardRowField}>
+                      <Text style={styles.modalLabel}>Expiry</Text>
+                      <TextInput
+                        style={styles.modalInput}
+                        value={newCardExpiry}
+                        onChangeText={setNewCardExpiry}
+                        placeholder="MM/YY"
+                        placeholderTextColor="#aaa"
+                        keyboardType="numbers-and-punctuation"
+                        maxLength={5}
+                      />
+                    </View>
+                    <View style={styles.addCardRowField}>
+                      <Text style={styles.modalLabel}>CVV</Text>
+                      <TextInput
+                        style={styles.modalInput}
+                        value={newCardCvv}
+                        onChangeText={setNewCardCvv}
+                        placeholder="•••"
+                        placeholderTextColor="#aaa"
+                        keyboardType="number-pad"
+                        maxLength={4}
+                        secureTextEntry
+                      />
+                    </View>
+                  </View>
+                  <Pressable style={styles.modalSaveBtn} onPress={() => { void saveNewCard(); }}>
+                    <Text style={styles.modalSaveBtnText}>Add card</Text>
+                  </Pressable>
+                  <Pressable style={styles.modalCancelBtn} onPress={closeAddCardSheet}>
+                    <Text style={styles.modalCancelBtnText}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+      </View>
+    );
+  }
 
-            <View style={styles.profileFieldDivider} />
+  // ── Edit Profile ────────────────────────────────────────────────
+  if (screen === 'profileEdit') {
+    return (
+      <View style={styles.editProfileRoot}>
+        <StatusBar style="dark" />
+        <View style={styles.editProfileHeader}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('profile')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color="#171717" />
+          </Pressable>
+          <Text style={styles.editProfileHeaderTitle}>Edit Profile</Text>
+          <Pressable
+            style={styles.editProfileHeaderSide}
+            onPress={() => { void saveProfile(); }}
+            hitSlop={8}
+          >
+            <Ionicons
+              name="checkmark"
+              size={28}
+              color={profileDirty ? '#22c55e' : '#c8c8c8'}
+            />
+          </Pressable>
+        </View>
 
-            <Pressable style={styles.paymentRow} onPress={() => setCashEnabled(v => !v)}>
-              <View style={[styles.paymentCardIcon, { backgroundColor: '#e8f5e9' }]}>
-                <Ionicons name="cash" size={16} color="#2e7d32" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.paymentRowLabel}>Cash</Text>
-                <Text style={styles.paymentRowSub}>{cashEnabled ? 'Accepted' : 'Disabled'}</Text>
-              </View>
-              <View style={[styles.paymentToggle, cashEnabled && styles.paymentToggleOn]}>
-                <View style={[styles.paymentToggleThumb, cashEnabled && styles.paymentToggleThumbOn]} />
-              </View>
-            </Pressable>
-
-            <View style={styles.profileFieldDivider} />
-
-            <Pressable style={styles.paymentAddRow}>
-              <View style={styles.paymentAddIcon}>
-                <Ionicons name="add" size={20} color="#171717" />
-              </View>
-              <Text style={styles.paymentAddText}>Add Payment Method</Text>
-              <Ionicons name="chevron-forward" size={18} color="#ccc" />
+        <ScrollView
+          style={styles.editProfileScroll}
+          contentContainerStyle={styles.editProfileScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.editProfileAvatarWrap}>
+            <View style={styles.editProfileAvatarImage}>
+              <Ionicons name="person" size={56} color="#8a8a8a" />
+            </View>
+            <Pressable style={styles.editProfileAvatarCamera} hitSlop={6}>
+              <Ionicons name="camera" size={18} color="#171717" />
             </Pressable>
           </View>
 
+          <View style={styles.editProfileField}>
+            <Text style={styles.editProfileLabel}>First name</Text>
+            <TextInput
+              style={styles.editProfileInput}
+              value={editingFirstName}
+              onChangeText={setEditingFirstName}
+              placeholder="Charlotte"
+              placeholderTextColor="#b0b0b0"
+              autoCapitalize="words"
+            />
+          </View>
+
+          <View style={styles.editProfileField}>
+            <Text style={styles.editProfileLabel}>Last name</Text>
+            <TextInput
+              style={styles.editProfileInput}
+              value={editingLastName}
+              onChangeText={setEditingLastName}
+              placeholder="King"
+              placeholderTextColor="#b0b0b0"
+              autoCapitalize="words"
+            />
+          </View>
+
+          <View style={styles.editProfileField}>
+            <Text style={styles.editProfileLabel}>E mail address</Text>
+            <TextInput
+              style={styles.editProfileInput}
+              value={editingEmail}
+              onChangeText={setEditingEmail}
+              placeholder="johnkinggraphics@gmail.com"
+              placeholderTextColor="#b0b0b0"
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+          </View>
+
+          <View style={styles.editProfileField}>
+            <Text style={styles.editProfileLabel}>User name</Text>
+            <TextInput
+              style={styles.editProfileInput}
+              value={editingUsername}
+              onChangeText={setEditingUsername}
+              placeholder="@johnkinggraphics"
+              placeholderTextColor="#b0b0b0"
+              autoCapitalize="none"
+            />
+          </View>
+
+          <View style={styles.editProfileField}>
+            <Text style={styles.editProfileLabel}>Password</Text>
+            <View style={styles.editProfilePasswordRow}>
+              <TextInput
+                style={[styles.editProfileInput, styles.editProfilePasswordInput]}
+                value={editingPassword}
+                onChangeText={setEditingPassword}
+                placeholder="••••••••••"
+                placeholderTextColor="#b0b0b0"
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+              />
+              <Pressable style={styles.editProfileEyeBtn} onPress={() => setShowPassword(v => !v)} hitSlop={8}>
+                <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={22} color="#171717" />
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.editProfileField}>
+            <Text style={styles.editProfileLabel}>Phone number</Text>
+            <View style={styles.editProfilePhoneRow}>
+              <Pressable style={styles.editProfileCountryBtn} onPress={() => setCountryPickerVisible(true)}>
+                <Text style={styles.editProfileCountryText}>{countryCode}</Text>
+                <Ionicons name="chevron-down" size={16} color="#171717" />
+              </Pressable>
+              <TextInput
+                style={[styles.editProfileInput, styles.editProfilePhoneInput]}
+                value={editingPhone}
+                onChangeText={setEditingPhone}
+                placeholder="6895312"
+                placeholderTextColor="#b0b0b0"
+                keyboardType="phone-pad"
+              />
+            </View>
+            <Text style={styles.editProfileHint}>
+              Valid mobile or landline for your country. Saved as E.164. Each number can only be linked once on this device.
+            </Text>
+          </View>
         </ScrollView>
 
-        {/* Address modal */}
+        <Modal visible={countryPickerVisible} animationType="fade" transparent statusBarTranslucent>
+          <View style={styles.editProfilePickerOverlay}>
+            <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setCountryPickerVisible(false)} />
+            <View style={styles.editProfilePickerSheet}>
+              <Text style={styles.editProfilePickerTitle}>Country code</Text>
+              {countryCodes.map(({ code, label }) => (
+                <Pressable
+                  key={code}
+                  style={styles.editProfilePickerRow}
+                  onPress={() => { setCountryCode(code); setCountryPickerVisible(false); }}
+                >
+                  <Text style={styles.editProfilePickerCode}>{code}</Text>
+                  <Text style={styles.editProfilePickerLabel}>{label}</Text>
+                  {countryCode === code ? <Ionicons name="checkmark" size={20} color="#22c55e" /> : <View style={{ width: 20 }} />}
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </Modal>
+
         <Modal visible={addressModal !== null} animationType="slide" transparent statusBarTranslucent>
           <View style={styles.modalOverlay}>
             <View style={styles.modalSheet}>
@@ -633,7 +994,7 @@ export default function App() {
             </Pressable>
             <View>
               <Text style={styles.greeting}>Good morning</Text>
-              <Text style={styles.userName}>{userName}</Text>
+              <Text style={styles.userName}>{displayName}</Text>
             </View>
           </View>
           <Pressable style={styles.supportButton} onPress={() => setSupportVisible(true)}>
@@ -937,26 +1298,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffd54a',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  profileIcon: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileHead: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#171717',
-    marginBottom: 2,
-  },
-  profileBody: {
-    width: 18,
-    height: 10,
-    borderTopLeftRadius: 9,
-    borderTopRightRadius: 9,
-    backgroundColor: '#171717',
   },
   greeting: {
     color: '#666666',
@@ -1395,249 +1736,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#171717',
   },
-  // Profile Screen
-  profileScreenHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 58,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  profileScreenBack: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f5f5f5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileScreenTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#171717',
-  },
-  profileScreenContent: {
-    padding: 20,
-    gap: 20,
-    paddingBottom: 60,
-  },
-  profileAvatarWrap: {
-    alignItems: 'center',
-    marginVertical: 12,
-    position: 'relative',
-  },
-  profileAvatarLarge: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: '#ffd54a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileAvatarEdit: {
-    position: 'absolute',
-    bottom: 0,
-    right: '30%',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#e8e8e8',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileFieldGroup: {
-    backgroundColor: '#ffffff',
-    borderRadius: 20,
-    padding: 18,
-    gap: 0,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  profileFieldGroupLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#aaaaaa',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 14,
-  },
-  profileField: {
-    gap: 4,
-    paddingVertical: 4,
-  },
-  profileFieldLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#aaaaaa',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  profileFieldInput: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#171717',
-    paddingVertical: 8,
-  },
-  profileFieldDivider: {
-    height: 1,
-    backgroundColor: '#f0f0f0',
-    marginVertical: 8,
-  },
-  profilePlaceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 10,
-  },
-  profilePlaceLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#171717',
-  },
-  profilePlaceSub: {
-    fontSize: 12,
-    color: '#aaaaaa',
-    marginTop: 2,
-  },
-  profileSaveBtn: {
-    backgroundColor: '#171717',
-    borderRadius: 18,
-    paddingVertical: 18,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  profileSaveBtnText: {
-    color: '#ffd54a',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  profileHeaderSaveBtn: {
-    backgroundColor: '#ffd54a',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  profileHeaderSaveBtnText: {
-    color: '#171717',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  profileFieldRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    gap: 8,
-  },
-  profileFieldIcon: {
-    padding: 4,
-  },
-  profileFieldInputActive: {
-    color: '#171717',
-    borderBottomWidth: 1.5,
-    borderBottomColor: '#ffd54a',
-  },
-  // Payments
-  paymentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-  },
-  paymentCardIcon: {
-    width: 42,
-    height: 28,
-    borderRadius: 6,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  paymentCardIconVisa: {
-    backgroundColor: '#1a1f71',
-  },
-  paymentCardIconMC: {
-    backgroundColor: '#eb001b',
-  },
-  paymentCardIconText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  paymentRowLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#171717',
-  },
-  paymentRowSub: {
-    fontSize: 12,
-    color: '#aaaaaa',
-    marginTop: 1,
-  },
-  paymentDefaultBadge: {
-    backgroundColor: '#fff8e1',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginRight: 6,
-  },
-  paymentDefaultText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#b8860b',
-  },
-  paymentToggle: {
-    width: 44,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#e0e0e0',
-    justifyContent: 'center',
-    paddingHorizontal: 3,
-  },
-  paymentToggleOn: {
-    backgroundColor: '#ffd54a',
-  },
-  paymentToggleThumb: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  paymentToggleThumbOn: {
-    alignSelf: 'flex-end',
-  },
-  paymentAddRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-  },
-  paymentAddIcon: {
-    width: 42,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  paymentAddText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#171717',
-  },
   // Destination Card
   destinationCard: {
     backgroundColor: '#ffffff',
@@ -2011,6 +2109,352 @@ const styles = StyleSheet.create({
   tabLabelActive: {
     color: '#1a1a1a',
     fontWeight: '700',
+  },
+  // Edit Profile screen (reference layout)
+  editProfileRoot: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  editProfileHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 56,
+    paddingHorizontal: 4,
+    paddingBottom: 12,
+    backgroundColor: '#ffffff',
+  },
+  editProfileHeaderSide: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editProfileHeaderTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#171717',
+  },
+  editProfileScroll: {
+    flex: 1,
+  },
+  editProfileScrollContent: {
+    paddingHorizontal: 22,
+    paddingBottom: 40,
+    paddingTop: 4,
+  },
+  profileViewScrollContent: {
+    paddingHorizontal: 22,
+    paddingBottom: 40,
+    paddingTop: 4,
+  },
+  profileViewSectionHeadingWrap: {
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  profilePaymentSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  profileViewSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#888888',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  profileViewSectionTitleFlex: {
+    flex: 1,
+  },
+  profileAddCardIconBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileViewCard: {
+    backgroundColor: '#fafafa',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    marginBottom: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#eeeeee',
+  },
+  profileViewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    gap: 12,
+  },
+  profileViewRowTop: {
+    alignItems: 'flex-start',
+  },
+  profileViewLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#171717',
+    flexShrink: 0,
+    width: 100,
+  },
+  profileViewValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#555555',
+    textAlign: 'right',
+  },
+  profileViewValueMultiline: {
+    textAlign: 'right',
+  },
+  profileViewDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#e8e8e8',
+  },
+  profilePaymentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+  },
+  profilePaymentCardIcon: {
+    width: 44,
+    height: 28,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profilePaymentVisa: {
+    backgroundColor: '#1a1f71',
+  },
+  profilePaymentMc: {
+    backgroundColor: '#eb001b',
+  },
+  profilePaymentCardIconText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  profilePaymentLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#171717',
+  },
+  profilePaymentSub: {
+    fontSize: 12,
+    color: '#888888',
+    marginTop: 2,
+  },
+  profilePaymentDefaultBadge: {
+    backgroundColor: '#fff8e1',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginRight: 4,
+  },
+  profilePaymentDefaultText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#b8860b',
+  },
+  resetPasswordButton: {
+    marginTop: 8,
+    marginBottom: 24,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#171717',
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  resetPasswordButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#171717',
+  },
+  addCardKb: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  addCardScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
+  },
+  addCardSheet: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    paddingBottom: 36,
+    gap: 10,
+    maxHeight: '88%',
+  },
+  addCardPreview: {
+    alignSelf: 'center',
+    width: '92%',
+    maxWidth: 400,
+    aspectRatio: 1.586,
+    maxHeight: 200,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#ffffff',
+    marginBottom: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addCardPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  addCardRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  addCardRowField: {
+    flex: 1,
+  },
+  editProfileAvatarWrap: {
+    alignSelf: 'center',
+    marginBottom: 28,
+    width: 120,
+    height: 120,
+    position: 'relative',
+  },
+  editProfileAvatarImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  editProfileAvatarCamera: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  editProfileField: {
+    marginBottom: 20,
+  },
+  editProfileHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#888888',
+    marginTop: 8,
+  },
+  editProfileLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#171717',
+    marginBottom: 8,
+  },
+  editProfileInput: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#4a4a4a',
+  },
+  editProfilePasswordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    borderRadius: 16,
+    paddingLeft: 16,
+    paddingRight: 4,
+  },
+  editProfilePasswordInput: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
+    paddingVertical: 14,
+  },
+  editProfileEyeBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editProfilePhoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  editProfileCountryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  editProfileCountryText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#4a4a4a',
+  },
+  editProfilePhoneInput: {
+    flex: 1,
+  },
+  editProfilePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  editProfilePickerSheet: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 36,
+  },
+  editProfilePickerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#171717',
+    marginBottom: 8,
+  },
+  editProfilePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f0f0f0',
+    gap: 12,
+  },
+  editProfilePickerCode: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#171717',
+    width: 56,
+  },
+  editProfilePickerLabel: {
+    flex: 1,
+    fontSize: 15,
+    color: '#666666',
   },
   fabHalo: {
     display: 'none',
