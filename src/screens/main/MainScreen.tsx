@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -71,6 +71,14 @@ type DestinationSuggestion = {
   subtitle: string;
   icon: 'airplane' | 'business' | 'location' | 'cafe' | 'storefront' | 'home';
   coordinate: LatLng;
+};
+
+type SearchSuggestion = {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: 'airplane' | 'business' | 'location' | 'cafe' | 'storefront' | 'home' | 'briefcase';
+  fullText?: string;
 };
 
 type SavedPlace = {
@@ -427,6 +435,9 @@ export default function MainScreen() {
   const [toQuery, setToQuery] = useState('');
   const [toFocused, setToFocused] = useState(false);
   const [toUserEdited, setToUserEdited] = useState(false);
+  const [toApiSuggestions, setToApiSuggestions] = useState<SearchSuggestion[]>([]);
+  const [destinationApiSuggestions, setDestinationApiSuggestions] = useState<SearchSuggestion[]>([]);
+  const [destinationPreviewCoordinate, setDestinationPreviewCoordinate] = useState<LatLng | null>(null);
   const [currentLocationLabel, setCurrentLocationLabel] = useState('Current location');
   const [roadRouteCoords, setRoadRouteCoords] = useState<LatLng[]>([]);
   const [routeAnimatorPoint, setRouteAnimatorPoint] = useState<LatLng | null>(null);
@@ -677,6 +688,26 @@ export default function MainScreen() {
       setToQuery(currentLocationLabel);
     }
   }, [userLocation, toUserEdited, currentLocationLabel]);
+
+  useEffect(() => {
+    const hasFrom = !!toQuery.trim();
+    const hasTo = !!destinationQuery.trim();
+    if (hasFrom || !hasTo || userLocation) {
+      setDestinationPreviewCoordinate(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const { key: mapsApiKey } = resolveGoogleMapsApiKey();
+      const destination = await geocodeAddress(destinationQuery, mapsApiKey ?? undefined);
+      if (!cancelled) setDestinationPreviewCoordinate(destination.coordinate);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [toQuery, destinationQuery, userLocation]);
 
   useEffect(() => {
     const normalizedFrom = toQuery.trim().toLowerCase();
@@ -977,7 +1008,7 @@ export default function MainScreen() {
     closeAddCardSheet();
   };
 
-  const mapCenter = userLocation ?? JAMAICA_KINGSTON;
+  const mapCenter = destinationPreviewCoordinate ?? userLocation ?? JAMAICA_KINGSTON;
   const toNormalized = toQuery.trim().toLowerCase();
   const isCurrentLocationQuery =
     !!userLocation &&
@@ -988,6 +1019,7 @@ export default function MainScreen() {
   const hasRouteInputs = !!toQuery.trim() && !!destinationQuery.trim();
   const hasRoute = hasRouteInputs && roadRouteCoords.length > 1;
   const showPickupPoint = !!userLocation && isCurrentLocationQuery && !hasRoute;
+  const showDestinationOnlyPoint = !hasRoute && !showPickupPoint && !!destinationPreviewCoordinate;
 
   useEffect(() => {
     if (!hasRoute) {
@@ -1012,18 +1044,103 @@ export default function MainScreen() {
     };
   }, [hasRoute, roadRouteCoords]);
 
+  const fetchPlaceSuggestions = useCallback(
+    async (input: string): Promise<SearchSuggestion[]> => {
+      const query = input.trim();
+      if (!query) return [];
+
+      const { key } = resolveGoogleMapsApiKey();
+      if (!key) return [];
+
+      const locationBias = userLocation
+        ? `&location=${userLocation.latitude},${userLocation.longitude}&radius=35000`
+        : '';
+      const url =
+        `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}` +
+        `&key=${key}&language=en&components=country:jm${locationBias}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+
+      const data = (await res.json()) as {
+        status?: string;
+        predictions?: Array<{
+          place_id?: string;
+          description?: string;
+          structured_formatting?: { main_text?: string; secondary_text?: string };
+        }>;
+      };
+      if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') return [];
+      const rows = Array.isArray(data.predictions) ? data.predictions : [];
+
+      return rows.slice(0, 8).map((p, i) => {
+        const title = p.structured_formatting?.main_text?.trim() || p.description?.split(',')[0]?.trim() || query;
+        const subtitle = p.structured_formatting?.secondary_text?.trim() || p.description?.trim() || '';
+        return {
+          id: p.place_id || `place-${title}-${i}`,
+          title,
+          subtitle,
+          icon: 'location',
+          fullText: p.description?.trim() || `${title}${subtitle ? `, ${subtitle}` : ''}`,
+        };
+      });
+    },
+    [userLocation]
+  );
+
+  useEffect(() => {
+    if (!toFocused || !toQuery.trim()) {
+      setToApiSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void fetchPlaceSuggestions(toQuery)
+        .then((rows) => {
+          if (!cancelled) setToApiSuggestions(rows);
+        })
+        .catch(() => {
+          if (!cancelled) setToApiSuggestions([]);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [toFocused, toQuery, fetchPlaceSuggestions]);
+
+  useEffect(() => {
+    if (!destinationFocused || !destinationQuery.trim()) {
+      setDestinationApiSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void fetchPlaceSuggestions(destinationQuery)
+        .then((rows) => {
+          if (!cancelled) setDestinationApiSuggestions(rows);
+        })
+        .catch(() => {
+          if (!cancelled) setDestinationApiSuggestions([]);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [destinationFocused, destinationQuery, fetchPlaceSuggestions]);
+
   // Animated drag-to-expand-map
   const panValue = useRef(new Animated.Value(0)).current;
   const minimizedTranslateY = useRef(new Animated.Value(0)).current;
   const destinationLiftAnim = useRef(new Animated.Value(0)).current;
   const scrollOffsetRef = useRef(0);
-  const searchSuggestions = [
+  const searchSuggestions: SearchSuggestion[] = [
     ...(homeAddress ? [{ id: 'saved-home', title: 'Home', subtitle: homeAddress, icon: 'home' as const }] : []),
     ...(workAddress ? [{ id: 'saved-work', title: 'Work', subtitle: workAddress, icon: 'briefcase' as const }] : []),
     ...destinationSuggestions,
   ].filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
 
-  const filteredSuggestions = searchSuggestions
+  const fallbackDestinationSuggestions = searchSuggestions
     .filter((item) => {
       if (!destinationQuery.trim()) return true;
       const query = destinationQuery.trim().toLowerCase();
@@ -1031,13 +1148,23 @@ export default function MainScreen() {
     })
     .slice(0, destinationQuery.trim() ? 5 : 4);
 
-  const filteredToSuggestions = searchSuggestions
+  const fallbackToSuggestions = searchSuggestions
     .filter((item) => {
       if (!toQuery.trim()) return true;
       const query = toQuery.trim().toLowerCase();
       return item.title.toLowerCase().includes(query) || item.subtitle.toLowerCase().includes(query);
     })
     .slice(0, toQuery.trim() ? 5 : 4);
+
+  const filteredSuggestions =
+    destinationFocused && destinationQuery.trim() && destinationApiSuggestions.length > 0
+      ? destinationApiSuggestions
+      : fallbackDestinationSuggestions;
+
+  const filteredToSuggestions =
+    toFocused && toQuery.trim() && toApiSuggestions.length > 0
+      ? toApiSuggestions
+      : fallbackToSuggestions;
 
   const sheetMinimizeRange = Math.max(SHEET_MINIMIZED_OFFSET, 1);
   /** Sheet up → shorter map; sheet lowered → map uses full window (no dead strip). */
@@ -1138,7 +1265,7 @@ export default function MainScreen() {
           tension: 65,
         }).start();
       }
-    }, 120);
+    }, 220);
   };
 
   const handleToFocus = () => {
@@ -1167,7 +1294,7 @@ export default function MainScreen() {
           tension: 65,
         }).start();
       }
-    }, 120);
+    }, 220);
   };
 
   const selectDestination = (value: string) => {
@@ -1652,6 +1779,10 @@ export default function MainScreen() {
             <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={styles.mapMarkerPickup} />
             </Marker>
+          ) : showDestinationOnlyPoint ? (
+            <Marker coordinate={destinationPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={styles.mapMarkerDropoff} />
+            </Marker>
           ) : null}
         </MapView>
         <Pressable
@@ -1722,6 +1853,10 @@ export default function MainScreen() {
             ) : showPickupPoint ? (
               <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
                 <View style={styles.mapMarkerPickup} />
+              </Marker>
+            ) : showDestinationOnlyPoint ? (
+              <Marker coordinate={destinationPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={styles.mapMarkerDropoff} />
               </Marker>
             ) : null}
           </MapView>
@@ -1823,7 +1958,7 @@ export default function MainScreen() {
             ],
           },
         ]}
-        {...panResponder.panHandlers}
+        {...(!(toFocused || destinationFocused) ? panResponder.panHandlers : {})}
       >
       <ScrollView
         style={{ flex: 1 }}
@@ -1906,7 +2041,7 @@ export default function MainScreen() {
             <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {filteredToSuggestions.map((item, index) => (
                 <View key={item.id}>
-                  <Pressable style={styles.suggestionItem} onPress={() => selectTo(item.title)}>
+                  <Pressable style={styles.suggestionItem} onPressIn={() => selectTo(item.fullText ?? item.title)}>
                     <View style={[styles.suggestionIconWrap, { backgroundColor: ui.softBg }]}>
                       <Ionicons name={item.icon} size={16} color={ui.text} />
                     </View>
@@ -1926,7 +2061,7 @@ export default function MainScreen() {
             <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {filteredSuggestions.map((item, index) => (
                 <View key={item.id}>
-                  <Pressable style={styles.suggestionItem} onPress={() => selectDestination(item.title)}>
+                  <Pressable style={styles.suggestionItem} onPressIn={() => selectDestination(item.fullText ?? item.title)}>
                     <View style={[styles.suggestionIconWrap, { backgroundColor: ui.softBg }]}>
                       <Ionicons name={item.icon} size={16} color={ui.text} />
                     </View>
