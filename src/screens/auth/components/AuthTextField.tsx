@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { authStyles } from '../authStyles';
+import { useAppTheme } from '../../../theme/ThemeProvider';
+import { useAuthStyles } from '../authStyles';
 
 /** Only props we forward — avoids `{...rest}` leaking values that confuse Fabric (e.g. string booleans). */
 export type AuthTextFieldProps = {
@@ -41,12 +42,14 @@ export function AuthTextField({
   blockStyle,
 }: AuthTextFieldProps) {
   const [focused, setFocused] = useState(false);
+  const { colors } = useAppTheme();
+  const authStyles = useAuthStyles();
 
   return (
     <View style={[authStyles.fieldBlock, blockStyle]}>
       <Text style={authStyles.fieldLabel}>{label}</Text>
       <View style={[authStyles.fieldShell, focused && authStyles.fieldShellFocused]}>
-        <Ionicons name={icon} size={20} color="#171717" style={authStyles.fieldIconLeft} />
+        <Ionicons name={icon} size={20} color={colors.text} style={authStyles.fieldIconLeft} />
         <TextInput
           value={value}
           onChangeText={onChangeText}
@@ -57,7 +60,7 @@ export function AuthTextField({
           autoComplete={autoComplete}
           textContentType={textContentType}
           style={[authStyles.fieldInput, style]}
-          placeholderTextColor="#a8a8a8"
+          placeholderTextColor={colors.textPlaceholder}
           onFocus={(e) => {
             setFocused(true);
             onFocus?.(e);

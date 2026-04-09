@@ -1,7 +1,10 @@
 import { StyleSheet } from 'react-native';
-import { colors } from '../../theme/colors';
+import { useMemo } from 'react';
+import type { ThemeColors } from '../../theme/ThemeProvider';
+import { useAppTheme } from '../../theme/ThemeProvider';
 
-export const authStyles = StyleSheet.create({
+export function createAuthStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.surface,
@@ -39,7 +42,7 @@ export const authStyles = StyleSheet.create({
   /** Login | Sign Up pill */
   modeToggleTrack: {
     flexDirection: 'row',
-    backgroundColor: '#f1f1f1',
+    backgroundColor: colors.inputBg,
     borderRadius: 999,
     padding: 4,
     marginBottom: 32,
@@ -52,8 +55,8 @@ export const authStyles = StyleSheet.create({
     borderRadius: 999,
   },
   modeToggleHalfActive: {
-    backgroundColor: colors.primaryDark,
-    shadowColor: '#000',
+    backgroundColor: colors.primary,
+    shadowColor: colors.text,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 6,
@@ -64,7 +67,7 @@ export const authStyles = StyleSheet.create({
     fontWeight: '700',
   },
   modeToggleTextActive: {
-    color: '#ffffff',
+    color: colors.textOnPrimary,
   },
   modeToggleTextIdle: {
     color: colors.text,
@@ -100,9 +103,9 @@ export const authStyles = StyleSheet.create({
   fieldShell: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fafafa',
+    backgroundColor: colors.inputBg,
     borderWidth: 1,
-    borderColor: '#e6e6e6',
+    borderColor: colors.inputBorder,
     borderRadius: 999,
     paddingHorizontal: 18,
     paddingVertical: 4,
@@ -114,7 +117,7 @@ export const authStyles = StyleSheet.create({
   },
   fieldShellFocused: {
     borderColor: colors.accent,
-    backgroundColor: '#fffef7',
+    backgroundColor: colors.surface,
   },
   fieldInput: {
     flex: 1,
@@ -128,7 +131,7 @@ export const authStyles = StyleSheet.create({
     marginRight: -4,
   },
   primaryBtn: {
-    backgroundColor: colors.primaryDark,
+    backgroundColor: colors.primary,
     borderRadius: 999,
     paddingVertical: 17,
     alignItems: 'center',
@@ -137,7 +140,7 @@ export const authStyles = StyleSheet.create({
     minHeight: 56,
   },
   primaryBtnText: {
-    color: '#ffffff',
+    color: colors.textOnPrimary,
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.3,
@@ -154,8 +157,8 @@ export const authStyles = StyleSheet.create({
     minHeight: 52,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#e4e4e4',
-    backgroundColor: '#ffffff',
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -172,14 +175,14 @@ export const authStyles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: '#ececec',
-    backgroundColor: '#f5f5f5',
+    borderColor: colors.border,
+    backgroundColor: colors.inputBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
   socialBtnDisabled: {
-    backgroundColor: '#f5f5f5',
-    borderColor: '#ececec',
+    backgroundColor: colors.inputBg,
+    borderColor: colors.border,
   },
   socialBtnText: {
     fontSize: 15,
@@ -189,7 +192,7 @@ export const authStyles = StyleSheet.create({
   },
   socialBtnTextDisabled: {
     fontSize: 15,
-    color: '#9c9c9c',
+    color: colors.textPlaceholder,
     fontWeight: '700',
     marginLeft: 10,
   },
@@ -264,13 +267,13 @@ export const authStyles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    backgroundColor: '#f0f0f0',
+    backgroundColor: colors.inputBg,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 15,
     fontWeight: '500',
-    color: '#4a4a4a',
+    color: colors.text,
     marginBottom: 16,
   },
   linkRow: {
@@ -286,4 +289,10 @@ export const authStyles = StyleSheet.create({
     color: colors.text,
     fontWeight: '700',
   },
-});
+  });
+}
+
+export function useAuthStyles() {
+  const { colors } = useAppTheme();
+  return useMemo(() => createAuthStyles(colors), [colors]);
+}

@@ -15,10 +15,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { isValidPhoneNumber, parsePhoneNumberFromString } from 'libphonenumber-js';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../../theme/colors';
 import { useAuth } from '../../context/AuthContext';
 import type { AuthEntryProps } from '../../navigation/types';
-import { authStyles } from './authStyles';
+import { useAppTheme } from '../../theme/ThemeProvider';
+import { useAuthStyles } from './authStyles';
 import { AuthModeToggle } from './components/AuthModeToggle';
 import { AuthPasswordField } from './components/AuthPasswordField';
 import { AuthTextField } from './components/AuthTextField';
@@ -27,6 +27,8 @@ type AuthMode = 'login' | 'signup';
 
 export default function SignInScreen({ navigation, route }: AuthEntryProps) {
   const { signIn, signUp } = useAuth();
+  const { colors } = useAppTheme();
+  const authStyles = useAuthStyles();
   const [mode, setMode] = useState<AuthMode>(route.name === 'SignUp' ? 'signup' : 'login');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -260,7 +262,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
                 <Ionicons
                   name={rememberMe ? 'checkbox' : 'square-outline'}
                   size={20}
-                  color={rememberMe ? colors.primaryDark : colors.textMuted}
+                  color={rememberMe ? colors.primary : colors.textMuted}
                 />
                 <Text style={authStyles.rememberMeText}>Remember me</Text>
               </Pressable>
@@ -283,15 +285,15 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
 
           <View style={authStyles.socialIconsRow}>
             <Pressable style={authStyles.socialIconBtn} disabled>
-              <Ionicons name="logo-google" size={20} color="#9c9c9c" />
+              <Ionicons name="logo-google" size={20} color={colors.textPlaceholder} />
             </Pressable>
             {Platform.OS === 'ios' ? (
               <Pressable style={authStyles.socialIconBtn} disabled>
-                <Ionicons name="logo-apple" size={22} color="#9c9c9c" />
+                <Ionicons name="logo-apple" size={22} color={colors.textPlaceholder} />
               </Pressable>
             ) : null}
             <Pressable style={authStyles.socialIconBtn} disabled>
-              <Ionicons name="mail-outline" size={20} color="#9c9c9c" />
+              <Ionicons name="mail-outline" size={20} color={colors.textPlaceholder} />
             </Pressable>
           </View>
           </Animated.View>

@@ -13,9 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import type { ResetPasswordProps } from '../../navigation/types';
-import { authStyles } from './authStyles';
+import { useAppTheme } from '../../theme/ThemeProvider';
+import { useAuthStyles } from './authStyles';
 
 export default function ResetPasswordScreen({ navigation, route }: ResetPasswordProps) {
+  const { colors } = useAppTheme();
+  const authStyles = useAuthStyles();
   const emailFromRoute = route.params?.email ?? '';
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -46,7 +49,7 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
     <SafeAreaView style={authStyles.root} edges={['top', 'bottom']}>
       <View style={authStyles.header}>
         <Pressable onPress={() => navigation.goBack()} hitSlop={12} accessibilityLabel="Back">
-          <Ionicons name="arrow-back" size={24} color="#171717" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </Pressable>
         <Text style={authStyles.headerTitle}>New password</Text>
       </View>
@@ -74,7 +77,7 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
             value={password}
             onChangeText={setPassword}
             placeholder="••••••••"
-            placeholderTextColor="#b0b0b0"
+            placeholderTextColor={colors.textPlaceholder}
             secureTextEntry
           />
 
@@ -84,7 +87,7 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
             value={confirm}
             onChangeText={setConfirm}
             placeholder="••••••••"
-            placeholderTextColor="#b0b0b0"
+            placeholderTextColor={colors.textPlaceholder}
             secureTextEntry
           />
 
@@ -94,7 +97,7 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
             disabled={submitting}
           >
             {submitting ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={colors.textOnPrimary} />
             ) : (
               <Text style={authStyles.primaryBtnText}>Update password</Text>
             )}

@@ -33,6 +33,7 @@ import {
 } from '../../lib/phone';
 import { addCardPreviewAsset, greyCarAsset } from '../../assets/images';
 import { useAuth } from '../../context/AuthContext';
+import { useAppTheme } from '../../theme/ThemeProvider';
 
 const rideOptions = [
   {
@@ -303,6 +304,7 @@ function ProfileIcon({ size }: { size: number }) {
 
 export default function MainScreen() {
   const { signOut } = useAuth();
+  const { colors, isDark } = useAppTheme();
   const [selectedRide, setSelectedRide] = useState('ride');
   const [activeTab, setActiveTab] = useState('home');
   const [screen, setScreen] = useState<'home' | 'profile' | 'profileEdit'>('home');
@@ -966,7 +968,7 @@ export default function MainScreen() {
   if (screen === 'profile') {
     return (
       <View style={styles.editProfileRoot}>
-        <StatusBar barStyle="dark-content" />
+        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
         <View style={styles.editProfileHeader}>
           <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
             <Ionicons name="arrow-back" size={24} color="#171717" />
@@ -1163,7 +1165,7 @@ export default function MainScreen() {
   if (screen === 'profileEdit') {
     return (
       <View style={styles.editProfileRoot}>
-        <StatusBar barStyle="dark-content" />
+        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
         <View style={styles.editProfileHeader}>
           <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('profile')} hitSlop={8}>
             <Ionicons name="arrow-back" size={24} color="#171717" />
@@ -1337,8 +1339,8 @@ export default function MainScreen() {
   // ────────────────────────────────────────────────────────────────
 
   return (
-    <View key={ANIMATION_TREE_KEY} style={styles.safeArea}>
-      <StatusBar barStyle="light-content" translucent={Platform.OS === 'android'} />
+    <View key={ANIMATION_TREE_KEY} style={[styles.safeArea, { backgroundColor: colors.background }]}>
+      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} translucent={Platform.OS === 'android'} />
 
       {/* Map: short when sheet is up, full screen when sheet is lowered */}
       <Animated.View style={[styles.mapWrapper, { height: mapHeightAnim }]}>
@@ -1729,7 +1731,7 @@ export default function MainScreen() {
       </Animated.View>
 
       {/* Bottom Navigation Tab Bar */}
-      <BlurView intensity={80} tint="light" style={styles.tabBar}>
+      <BlurView intensity={80} tint={isDark ? "dark" : "light"} style={styles.tabBar}>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('home')}>
           <Ionicons name={activeTab === 'home' ? 'home' : 'home-outline'} size={24} color={activeTab === 'home' ? '#1a1a1a' : '#aaaaaa'} />
           <Text style={[styles.tabLabel, activeTab === 'home' && styles.tabLabelActive]}>Home</Text>

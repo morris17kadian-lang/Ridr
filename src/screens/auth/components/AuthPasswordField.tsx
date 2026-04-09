@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Pressable, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { authStyles } from '../authStyles';
+import { useAppTheme } from '../../../theme/ThemeProvider';
+import { useAuthStyles } from '../authStyles';
 
 export type AuthPasswordFieldProps = {
   label: string;
@@ -31,13 +32,15 @@ export function AuthPasswordField({
   textContentType,
 }: AuthPasswordFieldProps) {
   const [focused, setFocused] = useState(false);
+  const { colors } = useAppTheme();
+  const authStyles = useAuthStyles();
   const [visible, setVisible] = useState(false);
 
   return (
     <View style={authStyles.fieldBlock}>
       <Text style={authStyles.fieldLabel}>{label}</Text>
       <View style={[authStyles.fieldShell, focused && authStyles.fieldShellFocused]}>
-        <Ionicons name="key-outline" size={20} color="#171717" style={authStyles.fieldIconLeft} />
+        <Ionicons name="key-outline" size={20} color={colors.text} style={authStyles.fieldIconLeft} />
         <TextInput
           value={value}
           onChangeText={onChangeText}
@@ -45,7 +48,7 @@ export function AuthPasswordField({
           autoComplete={autoComplete}
           textContentType={textContentType}
           style={[authStyles.fieldInput, style]}
-          placeholderTextColor="#a8a8a8"
+          placeholderTextColor={colors.textPlaceholder}
           onFocus={(e) => {
             setFocused(true);
             onFocus?.(e);
@@ -67,7 +70,7 @@ export function AuthPasswordField({
           hitSlop={8}
           accessibilityLabel={visible ? 'Hide password' : 'Show password'}
         >
-          <Ionicons name={visible ? 'eye-outline' : 'eye-off-outline'} size={22} color="#555" />
+          <Ionicons name={visible ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.textMuted} />
         </Pressable>
       </View>
     </View>

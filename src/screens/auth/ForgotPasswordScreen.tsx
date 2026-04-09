@@ -14,10 +14,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import type { ForgotPasswordProps } from '../../navigation/types';
-import { authStyles } from './authStyles';
+import { useAppTheme } from '../../theme/ThemeProvider';
+import { useAuthStyles } from './authStyles';
 
 export default function ForgotPasswordScreen({ navigation }: ForgotPasswordProps) {
   const { markPasswordResetSent } = useAuth();
+  const { colors } = useAppTheme();
+  const authStyles = useAuthStyles();
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -44,7 +47,7 @@ export default function ForgotPasswordScreen({ navigation }: ForgotPasswordProps
     <SafeAreaView style={authStyles.root} edges={['top', 'bottom']}>
       <View style={authStyles.header}>
         <Pressable onPress={() => navigation.goBack()} hitSlop={12} accessibilityLabel="Back">
-          <Ionicons name="arrow-back" size={24} color="#171717" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </Pressable>
         <Text style={authStyles.headerTitle}>Forgot password</Text>
       </View>
@@ -67,7 +70,7 @@ export default function ForgotPasswordScreen({ navigation }: ForgotPasswordProps
             value={email}
             onChangeText={setEmail}
             placeholder="you@example.com"
-            placeholderTextColor="#b0b0b0"
+            placeholderTextColor={colors.textPlaceholder}
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
@@ -79,7 +82,7 @@ export default function ForgotPasswordScreen({ navigation }: ForgotPasswordProps
             disabled={submitting}
           >
             {submitting ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={colors.textOnPrimary} />
             ) : (
               <Text style={authStyles.primaryBtnText}>Send reset link</Text>
             )}

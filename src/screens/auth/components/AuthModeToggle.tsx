@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from 'react-native';
-import { authStyles } from '../authStyles';
+import { useAuthStyles } from '../authStyles';
 
 type Mode = 'login' | 'signup';
 
@@ -10,6 +10,7 @@ type Props = {
 };
 
 export function AuthModeToggle({ mode, onLoginPress, onSignUpPress }: Props) {
+  const authStyles = useAuthStyles();
   return (
     <View style={authStyles.modeToggleTrack}>
       <Pressable

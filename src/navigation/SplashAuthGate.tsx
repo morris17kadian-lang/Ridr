@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { InteractionManager, View } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { colors } from '../theme/colors';
+import { useAppTheme } from '../theme/ThemeProvider';
 import { AuthStack } from './AuthStack';
 import { MainStack } from './MainStack';
 
@@ -16,6 +16,7 @@ import { MainStack } from './MainStack';
  */
 export function SplashAuthGate() {
   const { user, loading } = useAuth();
+  const { colors } = useAppTheme();
   const hiddenRef = useRef(false);
   const isLoading = loading === true;
   const hasUser = !!(user && typeof user === 'object');
