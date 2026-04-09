@@ -9,9 +9,9 @@
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/ridr-logo.png",
-      "imageWidth": 220,
+      "imageWidth": 240,
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#000000"
     },
     "ios": {
       "supportsTablet": true
@@ -19,7 +19,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/ridr-logo.png",
-        "backgroundColor": "#ffd54a"
+        "backgroundColor": "#000000"
       },
       "predictiveBackGestureEnabled": false
     },

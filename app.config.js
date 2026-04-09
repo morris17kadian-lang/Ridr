@@ -9,9 +9,9 @@ module.exports = {
     userInterfaceStyle: 'light',
     splash: {
       image: './assets/ridr-logo.png',
-      imageWidth: 220,
+      imageWidth: 240,
       resizeMode: 'contain',
-      backgroundColor: '#ffffff',
+      backgroundColor: '#000000',
     },
     ios: {
       supportsTablet: true,
@@ -22,7 +22,7 @@ module.exports = {
     android: {
       adaptiveIcon: {
         foregroundImage: './assets/ridr-logo.png',
-        backgroundColor: '#ffd54a',
+        backgroundColor: '#000000',
       },
       predictiveBackGestureEnabled: false,
       permissions: ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION'],
@@ -35,5 +35,9 @@ module.exports = {
     web: {
       favicon: './assets/ridr-logo.png',
     },
+    extra: {
+      googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+    },
+    plugins: ['expo-web-browser'],
   },
 };
