@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Animated, Dimensions, Image, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BlurView } from 'expo-blur';
 
 import { authEnabled, firebaseApp, firebaseReady, missingFirebaseConfig } from './src/lib/firebase';
 
@@ -38,6 +39,14 @@ const rideOptions = [
 ];
 
 const quickActions = ['Home', 'Work', 'Airport'];
+const destinationSuggestions = [
+  { id: 'airport', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' as const },
+  { id: 'half-way-tree', title: 'Half-Way Tree', subtitle: 'St. Andrew, Kingston', icon: 'business' as const },
+  { id: 'new-kingston', title: 'New Kingston', subtitle: 'Knutsford Blvd, Kingston', icon: 'location' as const },
+  { id: 'liguanea', title: 'Liguanea', subtitle: 'Hope Rd, Kingston', icon: 'cafe' as const },
+  { id: 'downtown', title: 'Downtown Kingston', subtitle: 'King Street, Kingston', icon: 'storefront' as const },
+  { id: 'portmore', title: 'Portmore', subtitle: 'St. Catherine, Jamaica', icon: 'home' as const },
+];
 
 // Default centre: Kingston, Jamaica
 const JAMAICA_KINGSTON = { latitude: 17.9970, longitude: -76.7936 };
@@ -58,31 +67,14 @@ function buildCoords(base: { latitude: number; longitude: number }) {
 }
 
 const MAP_HEIGHT = 400;
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const ANIMATION_TREE_KEY = 'animation-tree-v2';
 
 
-// Customer support icon — person silhouette with headset
+// Header notifications icon
 function SupportIcon() {
   return (
-    <View style={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}>
-      {/* Head */}
-      <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#fff', marginBottom: 1 }} />
-      {/* Body */}
-      <View style={{ width: 16, height: 9, borderTopLeftRadius: 8, borderTopRightRadius: 8, backgroundColor: '#fff' }} />
-      {/* Headset arc */}
-      <View style={{
-        position: 'absolute', top: 0, left: 1, right: 1, height: 10,
-        borderTopLeftRadius: 8, borderTopRightRadius: 8,
-        borderTopWidth: 2.5, borderLeftWidth: 2.5, borderRightWidth: 2.5,
-        borderColor: '#fff', borderBottomWidth: 0,
-      }} />
-      {/* Left ear cup */}
-      <View style={{ position: 'absolute', top: 6, left: 0, width: 4, height: 5, borderRadius: 2, backgroundColor: '#fff' }} />
-      {/* Right ear cup */}
-      <View style={{ position: 'absolute', top: 6, right: 0, width: 4, height: 5, borderRadius: 2, backgroundColor: '#fff' }} />
-      {/* Mic boom */}
-      <View style={{ position: 'absolute', top: 12, right: 1, width: 1.5, height: 5, borderRadius: 1, backgroundColor: '#fff', transform: [{ rotate: '20deg' }] }} />
-      <View style={{ position: 'absolute', top: 16, right: 0, width: 3, height: 3, borderRadius: 1.5, backgroundColor: '#fff' }} />
-    </View>
+    <Ionicons name="notifications-outline" size={22} color="#ffffff" />
   );
 }
 
@@ -128,6 +120,9 @@ export default function App() {
   const [workAddress, setWorkAddress] = useState('');
   const [addressModal, setAddressModal] = useState<'home' | 'work' | null>(null);
   const [addressInput, setAddressInput] = useState('');
+  const [destinationQuery, setDestinationQuery] = useState('');
+  const [destinationFocused, setDestinationFocused] = useState(false);
+  const destinationInputRef = useRef<TextInput>(null);
 
   // Support modal
   const [supportVisible, setSupportVisible] = useState(false);
@@ -197,6 +192,101 @@ export default function App() {
 
   const mapCenter = userLocation ?? JAMAICA_KINGSTON;
   const { pickup: pickupCoordinate, dropoff: dropoffCoordinate, driver: driverCoordinate, route: routeCoordinates } = buildCoords(mapCenter);
+
+  // Animated drag-to-expand-map
+  const panValue = useRef(new Animated.Value(0)).current;
+  const destinationLiftAnim = useRef(new Animated.Value(0)).current;
+  const scrollOffsetRef = useRef(0);
+  const maxDrag = SCREEN_HEIGHT - (MAP_HEIGHT - 30);
+  const searchSuggestions = [
+    ...(homeAddress ? [{ id: 'saved-home', title: 'Home', subtitle: homeAddress, icon: 'home' as const }] : []),
+    ...(workAddress ? [{ id: 'saved-work', title: 'Work', subtitle: workAddress, icon: 'briefcase' as const }] : []),
+    ...destinationSuggestions,
+  ].filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
+
+  const filteredSuggestions = searchSuggestions
+    .filter((item) => {
+      if (!destinationQuery.trim()) return true;
+      const query = destinationQuery.trim().toLowerCase();
+      return item.title.toLowerCase().includes(query) || item.subtitle.toLowerCase().includes(query);
+    })
+    .slice(0, destinationQuery.trim() ? 5 : 4);
+
+  const mapHeightAnim = panValue.interpolate({
+    inputRange: [0, maxDrag],
+    outputRange: [MAP_HEIGHT, SCREEN_HEIGHT],
+    extrapolate: 'clamp',
+  });
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gs) => scrollOffsetRef.current <= 0 && gs.dy > 8 && Math.abs(gs.dy) > Math.abs(gs.dx),
+      onMoveShouldSetPanResponderCapture: (_, gs) => scrollOffsetRef.current <= 0 && gs.dy > 8 && Math.abs(gs.dy) > Math.abs(gs.dx),
+      onPanResponderMove: (_, gs) => {
+        if (gs.dy > 0) panValue.setValue(gs.dy);
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: (_, gs) => {
+        if (gs.dy > 120 || gs.vy > 0.5) {
+          Animated.timing(panValue, {
+            toValue: maxDrag,
+            duration: 280,
+            useNativeDriver: false,
+          }).start(() => {
+            setMapExpanded(true);
+            panValue.setValue(0);
+          });
+        } else {
+          Animated.spring(panValue, {
+            toValue: 0,
+            useNativeDriver: false,
+            friction: 9,
+            tension: 70,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  const handleDestinationFocus = () => {
+    setDestinationFocused(true);
+    Animated.spring(destinationLiftAnim, {
+      toValue: 1,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 65,
+    }).start();
+  };
+
+  const handleDestinationBlur = () => {
+    setTimeout(() => {
+      setDestinationFocused(false);
+      Animated.spring(destinationLiftAnim, {
+        toValue: 0,
+        useNativeDriver: false,
+        friction: 8,
+        tension: 65,
+      }).start();
+    }, 120);
+  };
+
+  const selectDestination = (value: string) => {
+    setDestinationQuery(value);
+    destinationInputRef.current?.blur();
+    setDestinationFocused(false);
+    Animated.spring(destinationLiftAnim, {
+      toValue: 0,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 65,
+    }).start();
+  };
+
+  const searchSheetTranslateY = destinationLiftAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -(MAP_HEIGHT - 118)],
+  });
 
   // ── Profile Screen ──────────────────────────────────────────────
   if (screen === 'profile') {
@@ -439,13 +529,14 @@ export default function App() {
   // ────────────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.safeArea}>
+    <View key={ANIMATION_TREE_KEY} style={styles.safeArea}>
       <StatusBar style="light" translucent />
 
       {/* Full-bleed background map — behind header */}
+      <Animated.View style={[styles.mapWrapper, { height: mapHeightAnim }]}>
       <MapView
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-        style={styles.fullBleedMap}
+        style={StyleSheet.absoluteFillObject}
         region={{
           latitude: mapCenter.latitude,
           longitude: mapCenter.longitude,
@@ -480,6 +571,7 @@ export default function App() {
           </View>
         </Marker>
       </MapView>
+      </Animated.View>
 
       {/* Expand button over map */}
       <Pressable style={styles.mapExpandBtn} onPress={() => setMapExpanded(true)}>
@@ -612,22 +704,68 @@ export default function App() {
       </Modal>
 
       {/* Bottom sheet — scrollable cards */}
+      <Animated.View
+        style={[styles.contentScroll, { transform: [{ translateY: Animated.add(panValue, searchSheetTranslateY) }] }]}
+        {...panResponder.panHandlers}
+      >
       <ScrollView
-        style={styles.contentScroll}
+        style={{ flex: 1 }}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        bounces={true}
+        onScroll={(e) => {
+          scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+        }}
       >
+        {/* Drag handle */}
+        <View style={styles.dragHandleZone}>
+          <View style={styles.dragHandle} />
+        </View>
+
         {/* Destination Input Card */}
         <View style={styles.destinationCard}>
-          <Pressable style={styles.whereToButton}>
-            <Ionicons name="search" size={18} color="#999999" />
-            <Text style={styles.whereToText}>Where to?</Text>
+          <View style={[styles.whereToButton, destinationFocused ? styles.whereToButtonActive : null]}>
+            <Ionicons name="search" size={18} color={destinationFocused ? '#171717' : '#999999'} />
+            <TextInput
+              ref={destinationInputRef}
+              style={styles.whereToInput}
+              value={destinationQuery}
+              onChangeText={setDestinationQuery}
+              onFocus={handleDestinationFocus}
+              onBlur={handleDestinationBlur}
+              placeholder="Where to?"
+              placeholderTextColor="#aaaaaa"
+              returnKeyType="search"
+              autoCorrect={false}
+              autoCapitalize="words"
+            />
             <View style={styles.nowBadge}>
               <Text style={styles.nowText}>Now ▾</Text>
             </View>
-          </Pressable>
+          </View>
 
-          <View style={styles.addressList}>
+          {destinationFocused && filteredSuggestions.length > 0 ? (
+            <View style={styles.suggestionList}>
+              {filteredSuggestions.map((item, index) => (
+                <View key={item.id}>
+                  <Pressable style={styles.suggestionItem} onPress={() => selectDestination(item.title)}>
+                    <View style={styles.suggestionIconWrap}>
+                      <Ionicons name={item.icon} size={16} color="#171717" />
+                    </View>
+                    <View style={styles.suggestionTextBlock}>
+                      <Text style={styles.suggestionTitle}>{item.title}</Text>
+                      <Text style={styles.suggestionSubtitle} numberOfLines={1}>{item.subtitle}</Text>
+                    </View>
+                    <Ionicons name="arrow-up-outline" size={16} color="#b2b2b2" style={styles.suggestionActionIcon} />
+                  </Pressable>
+                  {index < filteredSuggestions.length - 1 ? <View style={styles.suggestionDivider} /> : null}
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {!destinationFocused ? <View style={styles.addressList}>
             <Pressable style={styles.addressItem} onPress={() => openAddress('home')}>
               <View style={styles.addressIconHome}>
                 <Ionicons name="home" size={14} color="#171717" />
@@ -649,7 +787,7 @@ export default function App() {
               </View>
               <Ionicons name={workAddress ? 'pencil' : 'add-circle-outline'} size={18} color="#aaaaaa" />
             </Pressable>
-          </View>
+          </View> : null}
         </View>
 
         {/* Service Type Cards */}
@@ -696,45 +834,30 @@ export default function App() {
           </View>
         </View>
       </ScrollView>
+      </Animated.View>
 
       {/* Bottom Navigation Tab Bar */}
-      <View style={styles.tabBar}>
+      <BlurView intensity={80} tint="light" style={styles.tabBar}>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('home')}>
-          <Ionicons name={activeTab === 'home' ? 'home' : 'home-outline'} size={24} color={activeTab === 'home' ? '#ffffff' : '#999999'} />
+          <Ionicons name={activeTab === 'home' ? 'home' : 'home-outline'} size={24} color={activeTab === 'home' ? '#1a1a1a' : '#aaaaaa'} />
           <Text style={[styles.tabLabel, activeTab === 'home' && styles.tabLabelActive]}>Home</Text>
         </Pressable>
 
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('activity')}>
-          <Ionicons name={activeTab === 'activity' ? 'time' : 'time-outline'} size={24} color={activeTab === 'activity' ? '#ffffff' : '#999999'} />
+          <Ionicons name={activeTab === 'activity' ? 'time' : 'time-outline'} size={24} color={activeTab === 'activity' ? '#1a1a1a' : '#aaaaaa'} />
           <Text style={[styles.tabLabel, activeTab === 'activity' && styles.tabLabelActive]}>Activity</Text>
         </Pressable>
 
-        <View style={styles.tabItemCenter} />
-
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('notifications')}>
-          <Ionicons name={activeTab === 'notifications' ? 'notifications' : 'notifications-outline'} size={24} color={activeTab === 'notifications' ? '#ffffff' : '#999999'} />
-          <Text style={[styles.tabLabel, activeTab === 'notifications' && styles.tabLabelActive]}>Alerts</Text>
+          <Ionicons name={activeTab === 'notifications' ? 'heart' : 'heart-outline'} size={24} color={activeTab === 'notifications' ? '#1a1a1a' : '#aaaaaa'} />
+          <Text style={[styles.tabLabel, activeTab === 'notifications' && styles.tabLabelActive]}>Favourites</Text>
         </Pressable>
 
         <Pressable style={styles.tabItem} onPress={() => setActiveTab('settings')}>
-          <Ionicons name={activeTab === 'settings' ? 'settings' : 'settings-outline'} size={24} color={activeTab === 'settings' ? '#ffffff' : '#999999'} />
+          <Ionicons name={activeTab === 'settings' ? 'settings' : 'settings-outline'} size={24} color={activeTab === 'settings' ? '#1a1a1a' : '#aaaaaa'} />
           <Text style={[styles.tabLabel, activeTab === 'settings' && styles.tabLabelActive]}>Settings</Text>
         </Pressable>
-      </View>
-
-      {/* FAB halo — white circle behind the floating button */}
-      <View style={styles.fabHalo} />
-
-      {/* Floating Plus Button */}
-      <Pressable
-        style={styles.floatingButton}
-        onPress={() => console.log('Book new ride')}
-      >
-        <View style={styles.plusButton}>
-          <View style={styles.plusHorizontal} />
-          <View style={styles.plusVertical} />
-        </View>
-      </Pressable>
+      </BlurView>
     </View>
   );
 }
@@ -745,20 +868,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  fullBleedMap: {
+  mapWrapper: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: MAP_HEIGHT,
     zIndex: 0,
+    overflow: 'hidden',
   },
   contentScroll: {
     position: 'absolute',
     top: MAP_HEIGHT - 30,
     left: 0,
     right: 0,
-    bottom: 70,
+    bottom: 0,
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
@@ -777,9 +900,23 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 100,
+    paddingTop: 8,
+    paddingBottom: 120,
     gap: 18,
+  },
+  dragHandleZone: {
+    alignItems: 'center',
+    paddingTop: 6,
+    paddingBottom: 6,
+  },
+  dragHandle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#e0e0e0',
+    marginTop: 8,
+    marginBottom: 4,
   },
   headerRow: {
     flexDirection: 'row',
@@ -1514,6 +1651,36 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
   },
+  destinationOverlay: {
+    position: 'absolute',
+    top: 108,
+    left: 20,
+    right: 20,
+    zIndex: 7,
+  },
+  destinationOverlayInner: {
+    borderRadius: 26,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.74)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.55)',
+    padding: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 22,
+    elevation: 10,
+  },
+  destinationOverlaySearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    borderRadius: 999,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
   whereToButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1523,8 +1690,20 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 16,
   },
-  whereToText: {
+  whereToButtonActive: {
+    backgroundColor: '#eef3f8',
+  },
+  whereToTriggerText: {
     color: '#aaaaaa',
+    fontSize: 15,
+    fontWeight: '500',
+    flex: 1,
+  },
+  whereToTriggerTextFilled: {
+    color: '#171717',
+  },
+  whereToInput: {
+    color: '#171717',
     fontSize: 15,
     fontWeight: '500',
     flex: 1,
@@ -1539,6 +1718,52 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '700',
+  },
+  suggestionList: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    paddingHorizontal: 2,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#f2f2f2',
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  suggestionIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f7f7f7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  suggestionTextBlock: {
+    flex: 1,
+    gap: 2,
+  },
+  suggestionTitle: {
+    color: '#171717',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  suggestionSubtitle: {
+    color: '#9b9b9b',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  suggestionActionIcon: {
+    transform: [{ rotate: '45deg' }],
+  },
+  suggestionDivider: {
+    height: 1,
+    backgroundColor: '#f1f1f1',
+    marginLeft: 60,
+    marginRight: 12,
   },
   addressList: {
     gap: 0,
@@ -1749,16 +1974,25 @@ const styles = StyleSheet.create({
   // Tab Bar Styles with Notch
   tabBar: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 70,
-    backgroundColor: '#171717',
+    bottom: 16,
+    left: 20,
+    right: 20,
+    height: 68,
+    borderRadius: 28,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingBottom: 10,
+    paddingHorizontal: 8,
+    paddingBottom: 4,
     zIndex: 6,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.10,
+    shadowRadius: 12,
+    elevation: 8,
   },
   tabItem: {
     flex: 1,
@@ -1768,19 +2002,18 @@ const styles = StyleSheet.create({
   },
   tabItemCenter: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   tabLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#999999',
+    color: '#aaaaaa',
   },
   tabLabelActive: {
-    color: '#ffffff',
-    fontWeight: '800',
+    color: '#1a1a1a',
+    fontWeight: '700',
   },
   fabHalo: {
+    display: 'none',
     position: 'absolute',
     bottom: 36,
     left: '50%',
@@ -1791,41 +2024,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     zIndex: 8,
   },
-  floatingButton: {
-    position: 'absolute',
-    bottom: 42,
-    left: '50%',
-    marginLeft: -28,
-    width: 56,
-    height: 56,
-    zIndex: 10,
-  },
-  plusButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#1a1a1a',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 12,
-    elevation: 16,
-  },
-  plusHorizontal: {
-    position: 'absolute',
-    width: 22,
-    height: 3,
-    backgroundColor: '#ffd54a',
-    borderRadius: 2,
-  },
-  plusVertical: {
-    position: 'absolute',
-    width: 3,
-    height: 22,
-    backgroundColor: '#ffd54a',
-    borderRadius: 2,
-  },
+  floatingButton: { display: 'none', position: 'absolute', bottom: 0, width: 0, height: 0, zIndex: 0 },
+  plusButton: { width: 0, height: 0 },
+  plusHorizontal: { width: 0, height: 0 },
+  plusVertical: { width: 0, height: 0 },
 });
 

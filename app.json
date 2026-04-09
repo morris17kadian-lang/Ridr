@@ -9,6 +9,7 @@
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/ridr-logo.png",
+      "imageWidth": 220,
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
