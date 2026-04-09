@@ -10,6 +10,8 @@ export const authStyles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 8,
     paddingBottom: 48,
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   welcomeTitle: {
     fontSize: 32,
@@ -17,6 +19,16 @@ export const authStyles = StyleSheet.create({
     letterSpacing: -0.5,
     color: colors.text,
     marginBottom: 10,
+  },
+  logoWrapper: {
+    alignItems: 'center',
+    paddingTop: 32,
+    paddingBottom: 28,
+  },
+  logoImage: {
+    width: 80,
+    height: 80,
+    resizeMode: 'contain',
   },
   welcomeSubtitle: {
     fontSize: 15,
@@ -149,6 +161,22 @@ export const authStyles = StyleSheet.create({
     flexDirection: 'row',
     marginBottom: 10,
   },
+  socialIconsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 14,
+    marginBottom: 10,
+  },
+  socialIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#ececec',
+    backgroundColor: '#f5f5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   socialBtnDisabled: {
     backgroundColor: '#f5f5f5',
     borderColor: '#ececec',
@@ -170,6 +198,23 @@ export const authStyles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 8,
     paddingVertical: 4,
+  },
+  forgotRememberRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  rememberMeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rememberMeText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textMuted,
   },
   forgotText: {
     fontSize: 14,

@@ -23,7 +23,7 @@ export type SignUpPayload = {
 type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (username: string, password: string) => Promise<void>;
   signUp: (payload: SignUpPayload) => Promise<void>;
   signOut: () => Promise<void>;
   /** Called after forgot-password flow — local session only for UI demo */
@@ -80,10 +80,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(
-    async (email: string, _password: string) => {
-      const trimmed = email.trim().toLowerCase();
-      if (!trimmed) throw new Error('Email required');
-      await persist({ email: trimmed, uid: `local_${Date.now()}` });
+    async (username: string, _password: string) => {
+      const trimmed = username.trim().toLowerCase();
+      if (!trimmed) throw new Error('Username required');
+      // Look up stored user by firstName (username)
+      const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            'firstName' in parsed &&
+            typeof (parsed as AuthUser).firstName === 'string' &&
+            (parsed as AuthUser).firstName!.trim().toLowerCase() === trimmed
+          ) {
+            const u = parsed as AuthUser;
+            await persist(u);
+            return;
+          }
+        } catch { /* ignore */ }
+      }
+      throw new Error('No account found for that username.');
     },
     [persist]
   );

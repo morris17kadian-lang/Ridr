@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Dimensions,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -12,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { isValidPhoneNumber, parsePhoneNumberFromString } from 'libphonenumber-js';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../../theme/colors';
 import { useAuth } from '../../context/AuthContext';
 import type { AuthEntryProps } from '../../navigation/types';
 import { authStyles } from './authStyles';
@@ -27,31 +31,67 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+
+  const screenH = Dimensions.get('window').height;
+  const logoSlide = useRef(new Animated.Value(0)).current;
+  const formSlide = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     setMode(route.name === 'SignUp' ? 'signup' : 'login');
   }, [route.name]);
 
-  const subtitle = useMemo(
-    () =>
-      mode === 'login'
-        ? 'Sign in to continue with Ridr.'
-        : 'Create your account to book rides and manage trips.',
-    [mode]
-  );
+  useEffect(() => {
+    Animated.sequence([
+      Animated.timing(logoSlide, {
+        toValue: 1,
+        duration: 1200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(formSlide, {
+        toValue: 1,
+        duration: 900,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  const logoAnimStyle = {
+    transform: [
+      {
+        translateY: logoSlide.interpolate({
+          inputRange: [0, 1],
+          outputRange: [screenH * 0.3, 0],
+        }),
+      },
+    ],
+  };
+
+  const formAnimStyle = {
+    opacity: formSlide,
+    transform: [
+      {
+        translateY: formSlide.interpolate({
+          inputRange: [0, 1],
+          outputRange: [70, 0],
+        }),
+      },
+    ],
+  };
 
   const onSubmit = async () => {
     if (mode === 'login') {
-      if (!email.trim() || !password) {
-        Alert.alert('Sign in', 'Enter email and password.');
+      if (!username.trim() || !password) {
+        Alert.alert('Sign in', 'Enter your username and password.');
         return;
       }
       setSubmitting(true);
       try {
-        await signIn(email.trim(), password);
+        await signIn(username.trim(), password);
       } catch (e) {
         Alert.alert('Sign in', e instanceof Error ? e.message : 'Something went wrong.');
       } finally {
@@ -112,9 +152,14 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
           contentContainerStyle={authStyles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={authStyles.welcomeTitle}>Welcome</Text>
-          <Text style={authStyles.welcomeSubtitle}>{subtitle}</Text>
+          <Animated.View style={[authStyles.logoWrapper, logoAnimStyle]}>
+            <Image
+              source={require('../../../assets/ridr-logo.png')}
+              style={authStyles.logoImage}
+            />
+          </Animated.View>
 
+          <Animated.View style={formAnimStyle}>
           <AuthModeToggle
             mode={mode}
             onLoginPress={() => setMode('login')}
@@ -163,18 +208,32 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
             </>
           ) : null}
 
-          <AuthTextField
-            label="Email address"
-            icon="mail-outline"
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            autoComplete="email"
-            textContentType="emailAddress"
-          />
+          {mode === 'login' ? (
+            <AuthTextField
+              label="Username"
+              icon="person-outline"
+              value={username}
+              onChangeText={setUsername}
+              placeholder="Your first name"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="username"
+              textContentType="username"
+            />
+          ) : (
+            <AuthTextField
+              label="Email address"
+              icon="mail-outline"
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+              textContentType="emailAddress"
+            />
+          )}
 
           <AuthPasswordField
             label={mode === 'login' ? 'Password' : 'Create password'}
@@ -186,13 +245,26 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
           />
 
           {mode === 'login' ? (
-            <Pressable
-              onPress={() => navigation.navigate('ForgotPassword')}
-              style={authStyles.forgotRow}
-              hitSlop={8}
-            >
-              <Text style={authStyles.forgotText}>Forgot password?</Text>
-            </Pressable>
+            <View style={authStyles.forgotRememberRow}>
+              <Pressable
+                onPress={() => navigation.navigate('ForgotPassword')}
+                hitSlop={8}
+              >
+                <Text style={authStyles.forgotText}>Forgot password?</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setRememberMe(v => !v)}
+                style={authStyles.rememberMeBtn}
+                hitSlop={8}
+              >
+                <Ionicons
+                  name={rememberMe ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={rememberMe ? colors.primaryDark : colors.textMuted}
+                />
+                <Text style={authStyles.rememberMeText}>Remember me</Text>
+              </Pressable>
+            </View>
           ) : null}
 
           <Pressable
@@ -209,17 +281,20 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
 
           <Text style={authStyles.socialDivider}>or continue with</Text>
 
-          <Pressable style={[authStyles.socialBtn, authStyles.socialBtnDisabled]} disabled>
-            <Ionicons name="logo-google" size={18} color="#9c9c9c" />
-            <Text style={authStyles.socialBtnTextDisabled}>Continue with Google (soon)</Text>
-          </Pressable>
-
-          {Platform.OS === 'ios' ? (
-            <Pressable style={[authStyles.socialBtn, authStyles.socialBtnDisabled]} disabled>
-              <Ionicons name="logo-apple" size={19} color="#9c9c9c" />
-              <Text style={authStyles.socialBtnTextDisabled}>Continue with Apple (soon)</Text>
+          <View style={authStyles.socialIconsRow}>
+            <Pressable style={authStyles.socialIconBtn} disabled>
+              <Ionicons name="logo-google" size={20} color="#9c9c9c" />
             </Pressable>
-          ) : null}
+            {Platform.OS === 'ios' ? (
+              <Pressable style={authStyles.socialIconBtn} disabled>
+                <Ionicons name="logo-apple" size={22} color="#9c9c9c" />
+              </Pressable>
+            ) : null}
+            <Pressable style={authStyles.socialIconBtn} disabled>
+              <Ionicons name="mail-outline" size={20} color="#9c9c9c" />
+            </Pressable>
+          </View>
+          </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
