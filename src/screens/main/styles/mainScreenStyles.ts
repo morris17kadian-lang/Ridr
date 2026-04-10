@@ -396,16 +396,22 @@ export const styles = StyleSheet.create({
   // Modals
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
   },
   modalSheet: {
+    width: '100%',
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    borderRadius: 28,
     padding: 24,
-    paddingBottom: 40,
     gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 16,
   },
   modalHandle: {
     width: 40,
@@ -477,18 +483,21 @@ export const styles = StyleSheet.create({
     marginTop: 4,
   },
   modalSaveBtnText: {
-    color: '#ffd54a',
+    color: '#ffffff',
     fontSize: 16,
     fontWeight: '800',
   },
   modalCancelBtn: {
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#e0e0e0',
   },
   modalCancelBtnText: {
-    color: '#999999',
+    color: '#171717',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   supportModalIcon: {
     width: 68,
@@ -1165,6 +1174,12 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+  },
+  rideDetailAvatarText: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   rideDetailRoute: {
     fontSize: 16,

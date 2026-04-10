@@ -40,6 +40,7 @@ import { ProfileEditScreen } from './profile/ProfileEditScreen';
 import { ProfileScreen } from './profile/ProfileScreen';
 import { DEFAULT_PROFILE_CARDS, type ProfileCard } from './profile/profileTypes';
 import { SettingsAppearanceScreen } from './settings/SettingsAppearanceScreen';
+import { NotificationsScreen } from './notifications/NotificationsScreen';
 import { SettingsHelpScreen } from './settings/SettingsHelpScreen';
 import { SettingsLanguageScreen } from './settings/SettingsLanguageScreen';
 import { SettingsNotificationsScreen } from './settings/SettingsNotificationsScreen';
@@ -535,7 +536,7 @@ export default function MainScreen() {
   const [favSearchOpen, setFavSearchOpen] = useState(false);
   const [selectedRideDetail, setSelectedRideDetail] = useState<typeof mockRideHistory[0] | null>(null);
   const [screen, setScreen] = useState<
-    'home' | 'activeRide' | 'profile' | 'profileEdit' |
+    'home' | 'activeRide' | 'profile' | 'profileEdit' | 'notifications' |
     'settingsNotifications' | 'settingsPassword' | 'settingsLanguage' |
     'settingsAppearance' | 'settingsHelp' | 'settingsTerms' | 'settingsSupport'
   >('home');
@@ -583,6 +584,12 @@ export default function MainScreen() {
   const [workAddress, setWorkAddress] = useState('');
   const [addressModal, setAddressModal] = useState<'home' | 'work' | null>(null);
   const [addressInput, setAddressInput] = useState('');
+  const [bookAddressModal, setBookAddressModal] = useState<'home' | 'work' | null>(null);
+  const [favBookModal, setFavBookModal] = useState<
+    | { type: 'place'; title: string; subtitle: string }
+    | { type: 'route'; from: string; to: string }
+    | null
+  >(null);
   const [destinationQuery, setDestinationQuery] = useState('');
   const [destinationFocused, setDestinationFocused] = useState(false);
   const destinationInputRef = useRef<TextInput>(null);
@@ -1335,6 +1342,15 @@ export default function MainScreen() {
   const openAddress = (type: 'home' | 'work') => {
     setAddressInput(type === 'home' ? homeAddress : workAddress);
     setAddressModal(type);
+  };
+
+  const handleAddressTap = (type: 'home' | 'work') => {
+    const addr = type === 'home' ? homeAddress : workAddress;
+    if (addr) {
+      setBookAddressModal(type);
+    } else {
+      openAddress(type);
+    }
   };
 
   const closeAddCardSheet = () => {
@@ -2283,6 +2299,10 @@ export default function MainScreen() {
     );
   }
 
+  if (screen === 'notifications') {
+    return <NotificationsScreen ui={ui} isDark={isDark} onBack={() => setScreen('home')} />;
+  }
+
   if (screen === 'settingsTerms') {
     return <SettingsTermsScreen ui={ui} isDark={isDark} onBack={() => setScreen('home')} />;
   }
@@ -2459,8 +2479,8 @@ export default function MainScreen() {
               <Text style={[styles.userName, { color: ui.text }]}>{displayName}</Text>
             </View>
           </View>
-          <Pressable style={[styles.supportButton, { backgroundColor: isDark ? '#2b2b31' : '#171717' }]} onPress={() => setScreen('settingsSupport')}>
-            <SupportIcon color={isDark ? ui.text : '#ffffff'} />
+          <Pressable style={[styles.supportButton, { backgroundColor: '#FFD000' }]} onPress={() => setScreen('notifications')}>
+            <Ionicons name="notifications" size={20} color="#171717" />
           </Pressable>
         </View>
       </Animated.View>
@@ -2473,8 +2493,8 @@ export default function MainScreen() {
         <Pressable style={styles.rideDetailOverlay} onPress={() => setSelectedRideDetail(null)}>
           <Pressable style={[styles.rideDetailSheet, { backgroundColor: ui.cardBg }]} onPress={() => {}}>
             <View style={styles.rideDetailHandle} />
-            <View style={[styles.rideDetailIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
-              <Ionicons name="car" size={32} color={ui.text} />
+            <View style={[styles.rideDetailIconWrap, { backgroundColor: driverAvatar(selectedRideDetail?.driver ?? '').color }]}>
+              <Text style={styles.rideDetailAvatarText}>{driverAvatar(selectedRideDetail?.driver ?? '').initials}</Text>
             </View>
             <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{selectedRideDetail?.from}</Text>
             <View style={styles.rideDetailArrowRow}>
@@ -2506,7 +2526,14 @@ export default function MainScreen() {
                 </View>
               </View>
             </View>
-            <Pressable style={styles.rideDetailBookBtn} onPress={() => setSelectedRideDetail(null)}>
+            <Pressable style={styles.rideDetailBookBtn} onPress={() => {
+              if (selectedRideDetail) {
+                setToQuery(selectedRideDetail.from);
+                setDestinationQuery(selectedRideDetail.to);
+                setActiveTab('home');
+              }
+              setSelectedRideDetail(null);
+            }}>
               <Text style={styles.rideDetailBookBtnText}>Book Again</Text>
             </Pressable>
           </Pressable>
@@ -2514,10 +2541,9 @@ export default function MainScreen() {
       </Modal>
 
       {/* Address Modal */}
-      <Modal visible={addressModal !== null} animationType="slide" transparent statusBarTranslucent>
+      <Modal visible={addressModal !== null} animationType="fade" transparent statusBarTranslucent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>
               {addressModal === 'home' ? 'Home Address' : 'Work Address'}
             </Text>
@@ -2538,6 +2564,115 @@ export default function MainScreen() {
             </Pressable>
           </View>
         </View>
+      </Modal>
+
+      {/* Book Address Modal */}
+      <Modal visible={bookAddressModal !== null} animationType="fade" transparent statusBarTranslucent onRequestClose={() => setBookAddressModal(null)}>
+        <Pressable style={styles.rideDetailOverlay} onPress={() => setBookAddressModal(null)}>
+          <Pressable style={[styles.rideDetailSheet, { backgroundColor: ui.cardBg }]} onPress={() => {}}>
+            <View style={styles.rideDetailHandle} />
+            <View style={[styles.rideDetailIconWrap, { backgroundColor: bookAddressModal === 'home' ? '#fff8e1' : '#e8f4fd' }]}>
+              <Ionicons name={bookAddressModal === 'home' ? 'home' : 'briefcase'} size={26} color={bookAddressModal === 'home' ? '#f59e0b' : '#3b82f6'} />
+            </View>
+            <Text style={[styles.rideDetailRoute, { color: ui.text }]}>
+              {bookAddressModal === 'home' ? 'Home' : 'Work'}
+            </Text>
+            <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted, textAlign: 'center' }]} numberOfLines={2}>
+              {bookAddressModal === 'home' ? homeAddress : workAddress}
+            </Text>
+            <View style={[styles.rideDetailDivider, { backgroundColor: ui.divider }]} />
+            <Pressable style={styles.rideDetailBookBtn} onPress={() => {
+              const addr = bookAddressModal === 'home' ? homeAddress : workAddress;
+              setDestinationQuery(addr);
+              setBookAddressModal(null);
+              setActiveTab('home');
+            }}>
+              <Text style={styles.rideDetailBookBtnText}>Go to this location</Text>
+            </Pressable>
+            <Pressable style={[styles.rideDetailBookBtn, { backgroundColor: isDark ? '#2b2b31' : '#171717', marginTop: 8 }]} onPress={() => {
+              const addr = bookAddressModal === 'home' ? homeAddress : workAddress;
+              setToQuery(addr);
+              setToUserEdited(true);
+              setBookAddressModal(null);
+              setActiveTab('home');
+            }}>
+              <Text style={[styles.rideDetailBookBtnText, { color: '#ffffff' }]}>Go from this location</Text>
+            </Pressable>
+            <Pressable style={[styles.modalCancelBtn, { marginTop: 4, width: '100%' }]} onPress={() => {
+              const type = bookAddressModal!;
+              setBookAddressModal(null);
+              openAddress(type);
+            }}>
+              <Text style={styles.modalCancelBtnText}>Edit address</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Favourite Book Modal */}
+      <Modal visible={favBookModal !== null} animationType="fade" transparent statusBarTranslucent onRequestClose={() => setFavBookModal(null)}>
+        <Pressable style={styles.rideDetailOverlay} onPress={() => setFavBookModal(null)}>
+          <Pressable style={[styles.rideDetailSheet, { backgroundColor: ui.cardBg }]} onPress={() => {}}>
+            <View style={styles.rideDetailHandle} />
+            <View style={[styles.rideDetailIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
+              <Ionicons
+                name={favBookModal?.type === 'route' ? 'repeat' : 'heart'}
+                size={26}
+                color={favBookModal?.type === 'route' ? ui.text : '#ef4444'}
+              />
+            </View>
+            {favBookModal?.type === 'route' ? (
+              <>
+                <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{favBookModal.from}</Text>
+                <View style={styles.rideDetailArrowRow}>
+                  <View style={[styles.rideDetailLine, { backgroundColor: ui.divider }]} />
+                  <Ionicons name="arrow-down" size={16} color={ui.textMuted} />
+                  <View style={[styles.rideDetailLine, { backgroundColor: ui.divider }]} />
+                </View>
+                <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{favBookModal.to}</Text>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{favBookModal?.title}</Text>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted, textAlign: 'center' }]}>{favBookModal?.subtitle}</Text>
+              </>
+            )}
+            <View style={[styles.rideDetailDivider, { backgroundColor: ui.divider }]} />
+            {favBookModal?.type === 'route' ? (
+              <Pressable style={styles.rideDetailBookBtn} onPress={() => {
+                if (favBookModal.type === 'route') {
+                  setToQuery(favBookModal.from);
+                  setToUserEdited(true);
+                  setDestinationQuery(favBookModal.to);
+                }
+                setFavBookModal(null);
+                setActiveTab('home');
+              }}>
+                <Text style={styles.rideDetailBookBtnText}>Book this route</Text>
+              </Pressable>
+            ) : (
+              <>
+                <Pressable style={styles.rideDetailBookBtn} onPress={() => {
+                  if (favBookModal?.type === 'place') setDestinationQuery(favBookModal.title);
+                  setFavBookModal(null);
+                  setActiveTab('home');
+                }}>
+                  <Text style={styles.rideDetailBookBtnText}>Go to this location</Text>
+                </Pressable>
+                <Pressable style={[styles.rideDetailBookBtn, { backgroundColor: isDark ? '#2b2b31' : '#171717', marginTop: 8 }]} onPress={() => {
+                  if (favBookModal?.type === 'place') {
+                    setToQuery(favBookModal.title);
+                    setToUserEdited(true);
+                  }
+                  setFavBookModal(null);
+                  setActiveTab('home');
+                }}>
+                  <Text style={[styles.rideDetailBookBtnText, { color: '#ffffff' }]}>Go from this location</Text>
+                </Pressable>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
       </Modal>
 
       <Modal
@@ -2721,12 +2856,12 @@ export default function MainScreen() {
                 autoCapitalize="none"
               />
               <Pressable
-                style={[styles.nowBadge, { backgroundColor: isDark ? ui.ctaBg : '#171717' }]}
+                style={[styles.nowBadge, { backgroundColor: '#FFD000' }]}
                 onPress={openFindingDriver}
                 accessibilityRole="button"
                 accessibilityLabel="Find driver and request ride"
               >
-                <Text style={[styles.nowText, { color: isDark ? ui.ctaText : '#ffffff' }]}>Go ▾</Text>
+                <Text style={[styles.nowText, { color: '#171717' }]}>Go ▾</Text>
               </Pressable>
             </View>
           </View>
@@ -2776,7 +2911,7 @@ export default function MainScreen() {
           ) : null}
 
           <View style={[styles.addressList, { backgroundColor: ui.cardBg }]}>
-            <Pressable style={styles.addressItem} onPress={() => openAddress('home')}>
+            <Pressable style={styles.addressItem} onPress={() => handleAddressTap('home')}>
               <View style={[styles.addressIconHome, { backgroundColor: isDark ? '#2b2b31' : undefined }]}>
                 <Ionicons name="home" size={14} color={ui.text} />
               </View>
@@ -2784,10 +2919,10 @@ export default function MainScreen() {
                 <Text style={[styles.addressLabel, { color: ui.text }]}>Home</Text>
                 <Text style={[styles.addressSub, { color: ui.textMuted }]} numberOfLines={1}>{homeAddress || 'Add address'}</Text>
               </View>
-              <Ionicons name={homeAddress ? 'pencil' : 'add-circle-outline'} size={18} color={ui.placeholder} />
+              <Ionicons name={homeAddress ? 'chevron-forward' : 'add-circle-outline'} size={18} color={ui.placeholder} />
             </Pressable>
             <View style={[styles.addressDivider, { backgroundColor: ui.divider }]} />
-            <Pressable style={styles.addressItem} onPress={() => openAddress('work')}>
+            <Pressable style={styles.addressItem} onPress={() => handleAddressTap('work')}>
               <View style={[styles.addressIconWork, { backgroundColor: isDark ? '#2b2b31' : undefined }]}>
                 <Ionicons name="briefcase" size={14} color={ui.text} />
               </View>
@@ -2795,7 +2930,7 @@ export default function MainScreen() {
                 <Text style={[styles.addressLabel, { color: ui.text }]}>Work</Text>
                 <Text style={[styles.addressSub, { color: ui.textMuted }]} numberOfLines={1}>{workAddress || 'Add address'}</Text>
               </View>
-              <Ionicons name={workAddress ? 'pencil' : 'add-circle-outline'} size={18} color={ui.placeholder} />
+              <Ionicons name={workAddress ? 'chevron-forward' : 'add-circle-outline'} size={18} color={ui.placeholder} />
             </Pressable>
           </View>
         </View>
@@ -2917,6 +3052,9 @@ export default function MainScreen() {
           onOpenBookedRide={openBookedRideFromActivity}
           refreshing={refreshingMain}
           onRefresh={onRefreshMain}
+          homeAddress={homeAddress}
+          workAddress={workAddress}
+          onBookAddress={(type) => setBookAddressModal(type)}
         />
       ) : null}
 
@@ -2930,6 +3068,8 @@ export default function MainScreen() {
           setFavSearchOpen={setFavSearchOpen}
           refreshing={refreshingMain}
           onRefresh={onRefreshMain}
+          onBookFavPlace={(title, subtitle) => setFavBookModal({ type: 'place', title, subtitle })}
+          onBookFavRoute={(from, to) => setFavBookModal({ type: 'route', from, to })}
         />
       ) : null}
 

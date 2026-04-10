@@ -32,6 +32,9 @@ type Props = {
   onOpenBookedRide: (ride: ActiveTripState) => void;
   refreshing: boolean;
   onRefresh: () => void;
+  homeAddress: string;
+  workAddress: string;
+  onBookAddress: (type: 'home' | 'work') => void;
 };
 
 export function ActivityTabScreen({
@@ -50,6 +53,9 @@ export function ActivityTabScreen({
   onOpenBookedRide,
   refreshing,
   onRefresh,
+  homeAddress,
+  workAddress,
+  onBookAddress,
 }: Props) {
   const presentRideMinutesLeft =
     presentRide ? Math.max(0, Math.ceil((presentRide.expiresAtMs - Date.now()) / 60000)) : 0;
@@ -96,6 +102,62 @@ export function ActivityTabScreen({
           />
         }
       >
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activityFilterRow} contentContainerStyle={styles.activityFilterContent}>
+          {ACTIVITY_FILTERS.map((f) => (
+            <Pressable
+              key={f.key}
+              style={[styles.activityFilterPill, activityFilter === f.key && styles.activityFilterPillActive]}
+              onPress={() => setActivityFilter(f.key)}
+            >
+              <Text style={[styles.activityFilterPillText, activityFilter === f.key && styles.activityFilterPillTextActive]}>{f.label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {(homeAddress || workAddress) ? (
+          <>
+            <Text style={[styles.activityGroupHeader, { color: ui.textMuted }]}>Saved places</Text>
+            {homeAddress ? (
+              <Pressable
+                style={[styles.tabCard, { backgroundColor: ui.cardBg }]}
+                onPress={() => onBookAddress('home')}
+              >
+                <View style={styles.activityCardContent}>
+                  <View style={styles.activityCardRow}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <Ionicons name="home" size={16} color={ui.text} />
+                      <Text style={[styles.activityCardTitle, { color: ui.text }]}>Home</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                  </View>
+                  <Text style={[styles.activityCardSub, { color: ui.textMuted }]} numberOfLines={1}>
+                    {homeAddress}
+                  </Text>
+                </View>
+              </Pressable>
+            ) : null}
+            {workAddress ? (
+              <Pressable
+                style={[styles.tabCard, { backgroundColor: ui.cardBg }]}
+                onPress={() => onBookAddress('work')}
+              >
+                <View style={styles.activityCardContent}>
+                  <View style={styles.activityCardRow}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <Ionicons name="briefcase" size={16} color={ui.text} />
+                      <Text style={[styles.activityCardTitle, { color: ui.text }]}>Work</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                  </View>
+                  <Text style={[styles.activityCardSub, { color: ui.textMuted }]} numberOfLines={1}>
+                    {workAddress}
+                  </Text>
+                </View>
+              </Pressable>
+            ) : null}
+          </>
+        ) : null}
+
         {recentBookedRides.length > 0 ? (
           <>
             <Text style={[styles.activityGroupHeader, { color: ui.textMuted }]}>Booked rides</Text>
@@ -153,17 +215,6 @@ export function ActivityTabScreen({
           </Pressable>
         ) : null}
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activityFilterRow} contentContainerStyle={styles.activityFilterContent}>
-          {ACTIVITY_FILTERS.map((f) => (
-            <Pressable
-              key={f.key}
-              style={[styles.activityFilterPill, activityFilter === f.key && styles.activityFilterPillActive]}
-              onPress={() => setActivityFilter(f.key)}
-            >
-              <Text style={[styles.activityFilterPillText, activityFilter === f.key && styles.activityFilterPillTextActive]}>{f.label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
         {(() => {
           const filtered = mockActivityFeed.filter((item) => {
             const s = activitySearch.trim().toLowerCase();

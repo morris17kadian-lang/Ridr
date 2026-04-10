@@ -15,6 +15,8 @@ type Props = {
   setFavSearchOpen: React.Dispatch<React.SetStateAction<boolean>>;
   refreshing: boolean;
   onRefresh: () => void;
+  onBookFavPlace: (title: string, subtitle: string) => void;
+  onBookFavRoute: (from: string, to: string) => void;
 };
 
 export function FavouritesTabScreen({
@@ -26,6 +28,8 @@ export function FavouritesTabScreen({
   setFavSearchOpen,
   refreshing,
   onRefresh,
+  onBookFavPlace,
+  onBookFavRoute,
 }: Props) {
   return (
     <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
@@ -77,7 +81,7 @@ export function FavouritesTabScreen({
               [p.title, p.subtitle].some((s) => s.toLowerCase().includes(favSearch.toLowerCase()))
           )
           .map((place) => (
-            <View key={place.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <Pressable key={place.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]} onPress={() => onBookFavPlace(place.title, place.subtitle)}>
               <View style={styles.favItem}>
                 <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
                   <Ionicons name={place.icon} size={18} color={ui.text} />
@@ -88,7 +92,7 @@ export function FavouritesTabScreen({
                 </View>
                 <Ionicons name="heart" size={18} color="#ef4444" />
               </View>
-            </View>
+            </Pressable>
           ))}
 
         <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Frequent routes</Text>
@@ -96,7 +100,7 @@ export function FavouritesTabScreen({
           { from: 'Half-Way Tree', to: 'Norman Manley Airport', count: 6 },
           { from: 'New Kingston', to: 'Portmore Mall', count: 3 },
         ].map((route, i) => (
-          <View key={i} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+          <Pressable key={i} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]} onPress={() => onBookFavRoute(route.from, route.to)}>
             <View style={styles.favItem}>
               <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
                 <Ionicons name="repeat" size={18} color={ui.text} />
@@ -109,7 +113,7 @@ export function FavouritesTabScreen({
               </View>
               <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
             </View>
-          </View>
+          </Pressable>
         ))}
       </ScrollView>
     </View>

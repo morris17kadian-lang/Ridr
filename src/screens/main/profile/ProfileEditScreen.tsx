@@ -220,10 +220,9 @@ export function ProfileEditScreen({
         </View>
       </Modal>
 
-      <Modal visible={addressModal !== null} animationType="slide" transparent statusBarTranslucent>
+      <Modal visible={addressModal !== null} animationType="fade" transparent statusBarTranslucent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>
               {addressModal === 'home' ? 'Home Address' : 'Work Address'}
             </Text>
