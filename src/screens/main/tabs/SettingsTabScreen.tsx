@@ -23,6 +23,7 @@ type Props = {
   themeOverride: ThemeOverride;
   refreshing: boolean;
   onRefresh: () => void;
+  onClearCache: () => void;
 };
 
 export function SettingsTabScreen({
@@ -33,6 +34,7 @@ export function SettingsTabScreen({
   themeOverride,
   refreshing,
   onRefresh,
+  onClearCache,
 }: Props) {
   return (
     <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
@@ -98,6 +100,15 @@ export function SettingsTabScreen({
               </Text>
               <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
             </View>
+          </Pressable>
+        </View>
+
+        <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Data</Text>
+        <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+          <Pressable style={styles.settingsRow} onPress={onClearCache}>
+            <Ionicons name="trash-outline" size={20} color={ui.text} />
+            <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Clear cache</Text>
+            <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
           </Pressable>
         </View>
 

@@ -31,11 +31,27 @@ type Props = {
   paymentLabel: string;
   onChangePayment: (value: 'Card' | 'Cash') => void;
   onClose: () => void;
-  onSwipeConfirm: () => void;
+  onSwipeConfirm: () => void | Promise<void>;
   onRetry: () => void;
+  /** True while POST /rides is in flight */
+  confirming?: boolean;
+  /** Dev-only: jump to “driver found” without waiting (not shown in production) */
+  onDevSkipWait?: () => void;
+  /** False when there is no saved default card — Card chip is disabled (use Cash or add a card in Profile). */
+  canPayWithCard: boolean;
 };
 
-function SwipeToSend({ ui, isDark, onConfirm }: { ui: MainScreenUi; isDark: boolean; onConfirm: () => void }) {
+function SwipeToSend({
+  ui,
+  isDark,
+  disabled,
+  onConfirm,
+}: {
+  ui: MainScreenUi;
+  isDark: boolean;
+  disabled?: boolean;
+  onConfirm: () => void;
+}) {
   const [thumbX, setThumbX] = useState(0);
   const [trackWidth, setTrackWidth] = useState(0);
   const trackXInWindow = useRef(0);
@@ -45,10 +61,10 @@ function SwipeToSend({ ui, isDark, onConfirm }: { ui: MainScreenUi; isDark: bool
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponderCapture: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponderCapture: () => true,
+        onStartShouldSetPanResponder: () => !disabled,
+        onStartShouldSetPanResponderCapture: () => !disabled,
+        onMoveShouldSetPanResponder: () => !disabled,
+        onMoveShouldSetPanResponderCapture: () => !disabled,
         onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: (_, g) => {
           // Keep thumb centered under the finger while dragging.
@@ -73,7 +89,7 @@ function SwipeToSend({ ui, isDark, onConfirm }: { ui: MainScreenUi; isDark: bool
           }
         },
       }),
-    [maxX, onConfirm]
+    [disabled, maxX, onConfirm]
   );
 
   return (
@@ -96,7 +112,7 @@ function SwipeToSend({ ui, isDark, onConfirm }: { ui: MainScreenUi; isDark: bool
       }}
     >
       <Text style={[styles.swipeHint, { color: ui.textMuted }]} pointerEvents="none">
-        Slide to send ride request
+        {disabled ? 'Sending request…' : 'Slide to send ride request'}
       </Text>
       <View
         style={[
@@ -128,6 +144,9 @@ export function FindingDriverModal({
   onClose,
   onSwipeConfirm,
   onRetry,
+  confirming = false,
+  onDevSkipWait,
+  canPayWithCard,
 }: Props) {
   const searching = phase === 'searching';
   const noDriver = phase === 'no_driver_found';
@@ -154,6 +173,15 @@ export function FindingDriverModal({
             <View style={styles.loadingBlock}>
               <ActivityIndicator size="large" color={ui.ctaBg} />
               <Text style={[styles.loadingSub, { color: ui.textMuted }]}>Matching you with a nearby driver…</Text>
+              {__DEV__ && typeof onDevSkipWait === 'function' ? (
+                <Pressable
+                  onPress={onDevSkipWait}
+                  style={[styles.devSkipBtn, { borderColor: ui.divider, backgroundColor: ui.softBg }]}
+                  accessibilityLabel="Skip wait (development only)"
+                >
+                  <Text style={[styles.devSkipText, { color: ui.textMuted }]}>Skip wait (dev)</Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : noDriver ? (
             <View style={styles.loadingBlock}>
@@ -184,15 +212,20 @@ export function FindingDriverModal({
               <View style={styles.paymentRow}>
                 {(['Card', 'Cash'] as const).map((option) => {
                   const selected = paymentLabel === option;
+                  const cardDisabled = option === 'Card' && !canPayWithCard;
                   return (
                     <Pressable
                       key={option}
-                      onPress={() => onChangePayment(option)}
+                      onPress={() => {
+                        if (cardDisabled) return;
+                        onChangePayment(option);
+                      }}
                       style={[
                         styles.paymentChip,
                         {
                           borderColor: selected ? ui.text : ui.divider,
                           backgroundColor: selected ? ui.text : ui.cardBg,
+                          opacity: cardDisabled ? 0.45 : 1,
                         },
                       ]}
                     >
@@ -204,6 +237,11 @@ export function FindingDriverModal({
                 })}
               </View>
             </View>
+            {!canPayWithCard ? (
+              <Text style={[styles.paymentHint, { color: ui.textMuted }]}>
+                Add a saved card in Profile and set a default to pay with card.
+              </Text>
+            ) : null}
             <View style={[styles.divider, { backgroundColor: ui.divider }]} />
             <Text style={[styles.routeLabel, { color: ui.textMuted }]}>From</Text>
             <Text style={[styles.routeText, { color: ui.text }]} numberOfLines={2}>
@@ -215,7 +253,9 @@ export function FindingDriverModal({
             </Text>
           </View>
 
-          {!searching && !noDriver ? <SwipeToSend ui={ui} isDark={isDark} onConfirm={onSwipeConfirm} /> : null}
+          {!searching && !noDriver ? (
+            <SwipeToSend ui={ui} isDark={isDark} disabled={confirming} onConfirm={() => void onSwipeConfirm()} />
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -283,6 +323,17 @@ const styles = StyleSheet.create({
   retryBtnText: {
     fontWeight: '700',
   },
+  devSkipBtn: {
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  devSkipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
   tripCard: {
     borderRadius: 14,
     padding: 16,
@@ -329,6 +380,11 @@ const styles = StyleSheet.create({
   routeText: {
     fontSize: 15,
     lineHeight: 20,
+  },
+  paymentHint: {
+    fontSize: 12,
+    marginTop: 8,
+    lineHeight: 16,
   },
   swipeTrack: {
     height: TRACK_H,

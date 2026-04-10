@@ -1,0 +1,67 @@
+{
+  "_id": "674a1b2c3d4e5f6789abcdef01",
+  "collection": "ride_requests",
+  "description": "Example document while the app is searching for a nearby driver (before match).",
+
+  "riderId": "674a0a1b2c3d4e5f6789abcde",
+  "sessionId": "sess_8f3e2a1b9c7d6e5f4a3b2c1d",
+
+  "status": "searching",
+  "searchPhase": "finding_driver",
+
+  "serviceArea": "JM",
+  "bookedFor": "self",
+
+  "pickup": {
+    "type": "Point",
+    "coordinates": [-76.7936, 18.0179],
+    "address": "Half-Way Tree, Kingston",
+    "placeId": "ChIJxxxxxxxxxxxxxxxx"
+  },
+  "dropoff": {
+    "type": "Point",
+    "coordinates": [-76.7875, 17.9352],
+    "address": "Norman Manley International Airport, Kingston",
+    "placeId": "ChIJyyyyyyyyyyyyyyyy"
+  },
+
+  "route": {
+    "encodedPolyline": "encoded_polyline_string_here",
+    "distanceMeters": 18500,
+    "durationSeconds": 2400
+  },
+
+  "pricing": {
+    "currency": "USD",
+    "estimatedFare": 12.4,
+    "surgeMultiplier": 1.0,
+    "breakdown": {
+      "base": 2.5,
+      "distance": 7.2,
+      "time": 2.7
+    }
+  },
+
+  "payment": {
+    "method": "card",
+    "paymentMethodId": "pm_xxxxxxxxxxxx",
+    "label": "Card"
+  },
+
+  "driverSearch": {
+    "startedAt": "2026-04-10T14:22:10.000Z",
+    "expiresAt": "2026-04-10T14:24:10.000Z",
+    "searchRadiusMeters": 5000,
+    "candidatesNotified": [],
+    "attempts": 0
+  },
+
+  "driver": null,
+
+  "metadata": {
+    "platform": "ios",
+    "appVersion": "1.0.0",
+    "createdAt": "2026-04-10T14:22:10.000Z",
+    "updatedAt": "2026-04-10T14:22:10.000Z"
+  }
+}

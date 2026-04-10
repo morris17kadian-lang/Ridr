@@ -1,0 +1,636 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Ridr API",
+    "description": "Ridr backend — ride documents live in MongoDB collection `ride_requests`. JMD fares, Kingston zones. Set `baseUrl`. Login/Register save tokens. **Fare estimate** and **Create ride** use `pickup` / `dropoff` with `address`, `lat`, `lng` (optional `placeId`). Create accepts optional `sessionId`, `serviceArea`, `bookedFor`, `route`, `payment` object, `metadata`. Responses wrap the resource in `rideRequest` / `rideRequests`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000/api/v1" },
+    { "key": "accessToken", "value": "" },
+    { "key": "refreshToken", "value": "" },
+    { "key": "rideRequestId", "value": "" },
+    { "key": "testEmail", "value": "test.user@example.com" },
+    { "key": "testPassword", "value": "password123" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const j = pm.response.json();",
+                  "  if (j.accessToken) pm.collectionVariables.set('accessToken', j.accessToken);",
+                  "  if (j.refreshToken) pm.collectionVariables.set('refreshToken', j.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"firstName\": \"Melissa\",\n  \"lastName\": \"Test\",\n  \"phone\": \"+15551234567\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/register"
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const j = pm.response.json();",
+                  "  if (j.accessToken) pm.collectionVariables.set('accessToken', j.accessToken);",
+                  "  if (j.refreshToken) pm.collectionVariables.set('refreshToken', j.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Refresh token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const j = pm.response.json();",
+                  "  if (j.accessToken) pm.collectionVariables.set('accessToken', j.accessToken);",
+                  "  if (j.refreshToken) pm.collectionVariables.set('refreshToken', j.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/refresh"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/auth/logout"
+          }
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/forgot-password"
+          }
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"PASTE_TOKEN_FROM_EMAIL_OR_SERVER_LOG\",\n  \"password\": \"newpassword456\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/reset-password"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get me",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/users/me"
+          }
+        },
+        {
+          "name": "Patch me",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Melissa\",\n  \"lastName\": \"Updated\",\n  \"phone\": \"+15559876543\"\n}"
+            },
+            "url": "{{baseUrl}}/users/me"
+          }
+        },
+        {
+          "name": "Put saved places",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"places\": [\n    {\n      \"label\": \"home\",\n      \"name\": \"Home\",\n      \"address\": \"123 Main St, City\",\n      \"lat\": 40.7128,\n      \"lng\": -74.006\n    },\n    {\n      \"label\": \"work\",\n      \"name\": \"Office\",\n      \"address\": \"3963 Mattson Street, Portland\",\n      \"lat\": 45.5152,\n      \"lng\": -122.6784\n    }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/users/me/saved-places"
+          }
+        },
+        {
+          "name": "Upload avatar",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "description": "jpeg, png, or webp; max 5MB",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/users/me/avatar"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ride types",
+      "item": [
+        {
+          "name": "List ride types (all)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ride-types"
+          }
+        },
+        {
+          "name": "List ride types — category ride",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ride-types?category=ride"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Drivers",
+      "item": [
+        {
+          "name": "Nearby drivers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/drivers/nearby?lat=18.0125&lng=-76.7994&radiusKm=5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ride requests",
+      "item": [
+        {
+          "name": "Fare estimate",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rideTypeSlug\": \"xlcab-go\",\n  \"distanceKm\": 6.2,\n  \"durationMinutes\": 18,\n  \"insurance\": false,\n  \"pickup\": {\n    \"address\": \"Half Way Tree Road, Kingston\",\n    \"lat\": 18.0125,\n    \"lng\": -76.7994\n  },\n  \"dropoff\": {\n    \"address\": \"Waterfront, Downtown Kingston\",\n    \"lat\": 18.007,\n    \"lng\": -76.792\n  }\n}"
+            },
+            "url": "{{baseUrl}}/rides/estimate"
+          },
+          "description": "Set `insurance` to true to add the JMD insurance add-on. **200** returns legacy fare fields plus `estimatedFare` (same as `total`) and nested `pricing` (currency, estimatedFare, surgeMultiplier, breakdown with base/distance/time/zonePremium/insurance). **404** `{ \"error\": \"Ride type not found\" }`.",
+          "response": [
+            {
+              "name": "200 — estimate with pricing",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides/estimate"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"currency\": \"JMD\",\n  \"subtotal\": 1520,\n  \"total\": 1520,\n  \"discountAmount\": 0,\n  \"baseTariff\": 1280,\n  \"pickupZone\": \"urban\",\n  \"dropoffZone\": \"urban\",\n  \"zonePremium\": 240,\n  \"zoneSummary\": \"Urban Kingston\",\n  \"estimatedFare\": 1520,\n  \"pricing\": {\n    \"currency\": \"JMD\",\n    \"estimatedFare\": 1520,\n    \"surgeMultiplier\": 1,\n    \"breakdown\": {\n      \"base\": 120,\n      \"distance\": 980,\n      \"time\": 180,\n      \"zonePremium\": 240,\n      \"insurance\": 0\n    }\n  },\n  \"rideType\": {\n    \"id\": \"…\",\n    \"slug\": \"xlcab-go\",\n    \"name\": \"XL Cab GO\",\n    \"seatCapacity\": 4,\n    \"promoPercentOff\": 0\n  },\n  \"zones\": {\n    \"pickup\": \"urban\",\n    \"dropoff\": \"urban\",\n    \"pickupLabel\": \"Urban Kingston\",\n    \"dropoffLabel\": \"Urban Kingston\"\n  }\n}"
+            },
+            {
+              "name": "404 — unknown ride type",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides/estimate"
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"error\": \"Ride type not found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create ride (immediate)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const j = pm.response.json();",
+                  "  if (j.rideRequest && j.rideRequest.id) pm.collectionVariables.set('rideRequestId', j.rideRequest.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rideTypeSlug\": \"xlcab-go\",\n  \"serviceCategory\": \"ride\",\n  \"sessionId\": \"sess_8f3e2a1b9c7d6e5f4a3b2c1d\",\n  \"serviceArea\": \"JM\",\n  \"bookedFor\": \"self\",\n  \"pickup\": {\n    \"address\": \"Half-Way Tree, Kingston\",\n    \"lat\": 18.0179,\n    \"lng\": -76.7936,\n    \"placeId\": \"ChIJxxxxxxxxxxxxxxxx\"\n  },\n  \"dropoff\": {\n    \"address\": \"Norman Manley International Airport, Kingston\",\n    \"lat\": 17.9352,\n    \"lng\": -76.7875,\n    \"placeId\": \"ChIJyyyyyyyyyyyyyyyy\"\n  },\n  \"route\": {\n    \"encodedPolyline\": \"encoded_polyline_string_here\",\n    \"distanceMeters\": 18500,\n    \"durationSeconds\": 2400\n  },\n  \"distanceKm\": 18.5,\n  \"durationMinutes\": 40,\n  \"immediate\": true,\n  \"preferences\": {\n    \"womanDriver\": false,\n    \"wheelchair\": false,\n    \"babySeat\": false\n  },\n  \"addons\": {\n    \"rideInsurance\": false\n  },\n  \"payment\": {\n    \"method\": \"card\",\n    \"paymentMethodId\": \"pm_xxxxxxxxxxxx\",\n    \"label\": \"Card\"\n  },\n  \"metadata\": {\n    \"platform\": \"ios\",\n    \"appVersion\": \"1.0.0\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/rides"
+          },
+          "description": "Persists to MongoDB `ride_requests`. Omit `sessionId` to auto-generate `sess_<hex>`. **201** `rideRequest` includes GeoJSON `pickup`/`dropoff` (`type` Point, `coordinates` [lng, lat]), `status` `searching`, `searchPhase` `finding_driver`, `driverSearch` window, `pricing`, `payment`, `metadata` (with `createdAt`/`updatedAt`). **404** `{ \"error\": \"Ride type not found for category\" }`.",
+          "response": [
+            {
+              "name": "201 — searching for driver",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides"
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"rideRequest\": {\n    \"id\": \"674a1b2c3d4e5f6789abcdef01\",\n    \"riderId\": \"674a0a1b2c3d4e5f6789abcde\",\n    \"sessionId\": \"sess_8f3e2a1b9c7d6e5f4a3b2c1d\",\n    \"status\": \"searching\",\n    \"searchPhase\": \"finding_driver\",\n    \"serviceArea\": \"JM\",\n    \"bookedFor\": \"self\",\n    \"pickup\": {\n      \"type\": \"Point\",\n      \"coordinates\": [-76.7936, 18.0179],\n      \"address\": \"Half-Way Tree, Kingston\",\n      \"placeId\": \"ChIJxxxxxxxxxxxxxxxx\"\n    },\n    \"dropoff\": {\n      \"type\": \"Point\",\n      \"coordinates\": [-76.7875, 17.9352],\n      \"address\": \"Norman Manley International Airport, Kingston\",\n      \"placeId\": \"ChIJyyyyyyyyyyyyyyyy\"\n    },\n    \"route\": {\n      \"encodedPolyline\": \"encoded_polyline_string_here\",\n      \"distanceMeters\": 18500,\n      \"durationSeconds\": 2400\n    },\n    \"pricing\": {\n      \"currency\": \"JMD\",\n      \"estimatedFare\": 2840,\n      \"surgeMultiplier\": 1,\n      \"breakdown\": {\n        \"base\": 120,\n        \"distance\": 2450,\n        \"time\": 400,\n        \"zonePremium\": 520,\n        \"insurance\": 0\n      }\n    },\n    \"payment\": {\n      \"method\": \"card\",\n      \"paymentMethodId\": \"pm_xxxxxxxxxxxx\",\n      \"label\": \"Card\"\n    },\n    \"driverSearch\": {\n      \"startedAt\": \"2026-04-10T14:22:10.000Z\",\n      \"expiresAt\": \"2026-04-10T14:24:10.000Z\",\n      \"searchRadiusMeters\": 5000,\n      \"candidatesNotified\": [],\n      \"attempts\": 0\n    },\n    \"driver\": null,\n    \"metadata\": {\n      \"platform\": \"ios\",\n      \"appVersion\": \"1.0.0\",\n      \"createdAt\": \"2026-04-10T14:22:10.000Z\",\n      \"updatedAt\": \"2026-04-10T14:22:10.000Z\"\n    },\n    \"createdAt\": \"2026-04-10T14:22:10.000Z\",\n    \"updatedAt\": \"2026-04-10T14:22:10.000Z\"\n  }\n}"
+            },
+            {
+              "name": "404 — ride type / category",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides"
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"error\": \"Ride type not found for category\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create ride (scheduled)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const j = pm.response.json();",
+                  "  if (j.rideRequest && j.rideRequest.id) pm.collectionVariables.set('rideRequestId', j.rideRequest.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rideTypeSlug\": \"sedan-rentals\",\n  \"serviceCategory\": \"rental\",\n  \"pickup\": {\n    \"address\": \"Half Way Tree Road, Kingston\",\n    \"lat\": 18.0125,\n    \"lng\": -76.7994\n  },\n  \"dropoff\": {\n    \"address\": \"Waterfront, Downtown Kingston\",\n    \"lat\": 18.007,\n    \"lng\": -76.792\n  },\n  \"distanceKm\": 6.2,\n  \"durationMinutes\": 18,\n  \"scheduledAt\": \"2026-08-09T19:15:00.000Z\",\n  \"payment\": { \"method\": \"cash\", \"label\": \"Cash\" },\n  \"metadata\": { \"platform\": \"ios\", \"appVersion\": \"1.0.0\" }\n}"
+            },
+            "url": "{{baseUrl}}/rides"
+          },
+          "description": "When `scheduledAt` is set, `status` is `scheduled`, `searchPhase` is `none`, and `driverSearch` is omitted until matching begins.",
+          "response": [
+            {
+              "name": "201 — scheduled",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides"
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"rideRequest\": {\n    \"id\": \"674a1b2c3d4e5f6789abcdef02\",\n    \"status\": \"scheduled\",\n    \"searchPhase\": \"none\",\n    \"scheduledAt\": \"2026-08-09T19:15:00.000Z\",\n    \"driverSearch\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List my ride requests",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/rides"
+          },
+          "description": "**200** `{ \"rideRequests\": [ … ] }` (newest first, max 50). Each item matches **Get ride by id** shape.",
+          "response": [
+            {
+              "name": "200 — list",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/rides"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"rideRequests\": [\n    {\n      \"id\": \"674a1b2c3d4e5f6789abcdef01\",\n      \"status\": \"searching\",\n      \"searchPhase\": \"finding_driver\",\n      \"pricing\": { \"currency\": \"JMD\", \"estimatedFare\": 2840 },\n      \"rideType\": { \"name\": \"XL Cab GO\", \"slug\": \"xlcab-go\" }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get ride request by id",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/rides/{{rideRequestId}}"
+          },
+          "description": "**200** `{ \"rideRequest\": { … } }` with populated `rideType` and `driver` (when set). **404** `{ \"error\": \"Ride request not found\" }`.",
+          "response": [
+            {
+              "name": "200 — full document",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"rideRequest\": {\n    \"id\": \"674a1b2c3d4e5f6789abcdef01\",\n    \"riderId\": \"674a0a1b2c3d4e5f6789abcde\",\n    \"sessionId\": \"sess_…\",\n    \"status\": \"searching\",\n    \"searchPhase\": \"finding_driver\",\n    \"serviceArea\": \"JM\",\n    \"bookedFor\": \"self\",\n    \"rideType\": { \"name\": \"XL Cab GO\", \"slug\": \"xlcab-go\", \"seatCapacity\": 4 },\n    \"pickup\": { \"type\": \"Point\", \"coordinates\": [-76.7936, 18.0179], \"address\": \"…\" },\n    \"dropoff\": { \"type\": \"Point\", \"coordinates\": [-76.7875, 17.9352], \"address\": \"…\" },\n    \"route\": {},\n    \"pricing\": {},\n    \"payment\": {},\n    \"driverSearch\": {},\n    \"driver\": null,\n    \"metadata\": { \"createdAt\": \"…\", \"updatedAt\": \"…\" }\n  }\n}"
+            },
+            {
+              "name": "404",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}"
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"error\": \"Ride request not found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Cancel ride request",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": "{{baseUrl}}/rides/{{rideRequestId}}/cancel"
+          },
+          "description": "**200** cancelled payload. **400** if already `completed` or `cancelled`. **404** not found.",
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [],
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}/cancel"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"rideRequest\": {\n    \"id\": \"674a1b2c3d4e5f6789abcdef01\",\n    \"status\": \"cancelled\",\n    \"searchPhase\": \"none\",\n    \"cancelledAt\": \"2026-04-10T14:30:00.000Z\"\n  }\n}"
+            },
+            {
+              "name": "400 — cannot cancel",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [],
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}/cancel"
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"error\": \"Ride request cannot be cancelled\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Rate ride request",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rating\": 5,\n  \"review\": \"Great trip\"\n}"
+            },
+            "url": "{{baseUrl}}/rides/{{rideRequestId}}/rate"
+          },
+          "description": "Body: `rating` 1–5, optional `review`. **200** success. **400** if not `completed` or already rated. **404** not found.",
+          "response": [
+            {
+              "name": "200",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}/rate"
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"rideRequest\": {\n    \"id\": \"674a1b2c3d4e5f6789abcdef01\",\n    \"userRating\": 5,\n    \"userReview\": \"Great trip\"\n  }\n}"
+            },
+            {
+              "name": "400 — not completed",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}/rate"
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"error\": \"Only completed ride requests can be rated\"\n}"
+            },
+            {
+              "name": "400 — already rated",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": { "mode": "raw", "raw": "" },
+                "url": "{{baseUrl}}/rides/{{rideRequestId}}/rate"
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"error\": \"Already rated\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Uploads",
+      "item": [
+        {
+          "name": "Upload document (multipart)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "category",
+                  "value": "documents",
+                  "type": "text",
+                  "description": "documents | misc"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/uploads"
+          }
+        }
+      ]
+    }
+  ]
+}

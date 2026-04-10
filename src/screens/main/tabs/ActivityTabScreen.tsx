@@ -175,7 +175,7 @@ export function ActivityTabScreen({
                     <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
                   </View>
                   <Text style={[styles.activityCardSub, { color: ui.textMuted }]}>
-                    {ride.driverName} · {ride.carDetails} · ${ride.fareUsd.toFixed(2)}
+                    {ride.driverName} · {ride.carDetails} · {ride.fareLabel ?? `$${ride.fareUsd.toFixed(2)}`}
                   </Text>
                   <Text style={[styles.activityCardSub, { color: ui.textMuted, marginTop: 2 }]}>
                     {ride.status.replace('_', ' ')} · PIN {ride.driverPin} · ETA {ride.etaMinutes} min · {ride.bookedFor === 'friend' ? 'Friend' : 'You'}
@@ -206,7 +206,7 @@ export function ActivityTabScreen({
                 <Ionicons name="chevron-forward" size={16} color="#92400e" />
               </View>
               <Text style={[styles.activityCardSub, { color: '#78350f' }]}>
-                {presentRide.driverName} · {presentRide.carDetails} · ${presentRide.fareUsd.toFixed(2)} · ETA {presentRide.etaMinutes} min
+                {presentRide.driverName} · {presentRide.carDetails} · {presentRide.fareLabel ?? `$${presentRide.fareUsd.toFixed(2)}`} · ETA {presentRide.etaMinutes} min
               </Text>
               <Text style={[styles.activityCardSub, { color: '#78350f', marginTop: 2 }]}>
                 PIN {presentRide.driverPin} · Expires in {presentRideMinutesLeft} min

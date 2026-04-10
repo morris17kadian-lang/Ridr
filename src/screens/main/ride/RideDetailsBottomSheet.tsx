@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
 
 import type { MainScreenUi } from '../mainScreenUi';
 import type { ActiveTripState } from './activeTripTypes';
@@ -9,12 +9,15 @@ type Props = {
   trip: ActiveTripState;
   ui: MainScreenUi;
   liveEtaMin: number;
+  /** Pan handlers for the top drag handle — pull down to show more map */
+  headerPanHandlers?: GestureResponderHandlers;
 };
 
 export function RideDetailsBottomSheet({
   trip,
   ui,
   liveEtaMin,
+  headerPanHandlers,
 }: Props) {
   const statusLabel =
     trip.status === 'driver_arriving'
@@ -43,6 +46,14 @@ export function RideDetailsBottomSheet({
               : 'Not provided';
   return (
     <View style={[styles.card, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+      <View
+        style={styles.handleRow}
+        accessibilityRole="adjustable"
+        accessibilityLabel="Ride details sheet. Pull down to expand map."
+        {...(headerPanHandlers ?? {})}
+      >
+        <View style={[styles.grabber, { backgroundColor: ui.textMuted }]} />
+      </View>
       <View style={styles.sheetHeaderRow}>
         <View>
           <Text style={[styles.sheetEyebrow, { color: ui.textMuted }]}>Ride details</Text>
@@ -58,7 +69,9 @@ export function RideDetailsBottomSheet({
       <View style={styles.metaRow}>
         <View style={[styles.metaPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
           <Text style={[styles.metaPillLabel, { color: ui.textMuted }]}>Fare</Text>
-          <Text style={[styles.metaPillValue, { color: ui.text }]}>${trip.fareUsd.toFixed(2)}</Text>
+          <Text style={[styles.metaPillValue, { color: ui.text }]}>
+            {trip.fareLabel ?? `$${trip.fareUsd.toFixed(2)}`}
+          </Text>
         </View>
         <View style={[styles.metaPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
           <Text style={[styles.metaPillLabel, { color: ui.textMuted }]}>Est. time</Text>
@@ -135,17 +148,27 @@ export function RideDetailsBottomSheet({
 
 const styles = StyleSheet.create({
   card: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+    width: '100%',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: 0,
     paddingHorizontal: 18,
-    paddingTop: 14,
+    paddingTop: 4,
     paddingBottom: 28,
+  },
+  handleRow: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 10,
+    marginHorizontal: -18,
+    paddingHorizontal: 18,
+  },
+  grabber: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    opacity: 0.35,
   },
   sheetHeaderRow: {
     flexDirection: 'row',
