@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -64,6 +64,43 @@ function driverAvatar(name: string): { initials: string; color: string } {
   const color = DRIVER_AVATAR_COLORS[Math.abs(hash) % DRIVER_AVATAR_COLORS.length];
   return { initials, color };
 }
+
+type ActivityItem = {
+  id: string;
+  type: 'ride' | 'payment' | 'profile' | 'settings' | 'promo';
+  title: string;
+  subtitle: string;
+  time: string;
+  daysAgo: number;
+  icon: string;
+  emoji?: string;
+  iconBg: string;
+  rideData?: { id: string; from: string; to: string; date: string; price: string; driver: string; rating: number };
+};
+
+const ACTIVITY_FILTERS = [
+  { key: 'all' as const, label: 'All' },
+  { key: 'today' as const, label: 'Today' },
+  { key: 'yesterday' as const, label: 'Yesterday' },
+  { key: '7days' as const, label: 'Last 7 Days' },
+  { key: 'month' as const, label: 'Last Month' },
+];
+
+const mockActivityFeed: ActivityItem[] = [
+  { id: 'a1', type: 'ride', title: 'Half-Way Tree → Norman Manley Airport', subtitle: 'Marcus W. · $12.40', time: 'Today, 9:14 AM', daysAgo: 0, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r1', from: 'Half-Way Tree', to: 'Norman Manley Airport', date: 'Today, 9:14 AM', price: '$12.40', driver: 'Marcus W.', rating: 5 } },
+  { id: 'a2', type: 'payment', title: 'Visa card added', subtitle: '····4242 · Payment method', time: 'Today, 8:30 AM', daysAgo: 0, icon: 'card-outline', emoji: '💳', iconBg: '#52b788' },
+  { id: 'a3', type: 'ride', title: 'New Kingston → Portmore Mall', subtitle: 'Diana R. · $8.20', time: 'Yesterday, 3:45 PM', daysAgo: 1, icon: 'car', iconBg: '#e2844a', rideData: { id: 'r2', from: 'New Kingston', to: 'Portmore Mall', date: 'Yesterday, 3:45 PM', price: '$8.20', driver: 'Diana R.', rating: 4 } },
+  { id: 'a4', type: 'settings', title: 'Notifications updated', subtitle: 'Email alerts enabled', time: 'Yesterday, 1:00 PM', daysAgo: 1, icon: 'notifications-outline', emoji: '🔔', iconBg: '#9b72cf' },
+  { id: 'a5', type: 'profile', title: 'Profile photo updated', subtitle: 'Display name changed', time: 'Yesterday, 10:15 AM', daysAgo: 1, icon: 'person-outline', emoji: '👤', iconBg: '#e25c6a' },
+  { id: 'a6', type: 'ride', title: 'Liguanea → Half-Way Tree', subtitle: 'Trevor A. · $5.10', time: 'Apr 7, 11:30 AM', daysAgo: 2, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r3', from: 'Liguanea', to: 'Half-Way Tree', date: 'Apr 7, 11:30 AM', price: '$5.10', driver: 'Trevor A.', rating: 5 } },
+  { id: 'a7', type: 'promo', title: 'Promo code applied', subtitle: 'RIDR20 · 20% off your next ride', time: 'Apr 7, 11:28 AM', daysAgo: 2, icon: 'pricetag-outline', emoji: '🏷️', iconBg: '#FFB800' },
+  { id: 'a8', type: 'ride', title: 'Downtown Kingston → New Kingston', subtitle: 'Sandra M. · $6.80', time: 'Apr 6, 8:00 AM', daysAgo: 3, icon: 'car', iconBg: '#e2844a', rideData: { id: 'r4', from: 'Downtown Kingston', to: 'New Kingston', date: 'Apr 6, 8:00 AM', price: '$6.80', driver: 'Sandra M.', rating: 4 } },
+  { id: 'a9', type: 'settings', title: 'Dark mode enabled', subtitle: 'Appearance settings changed', time: 'Apr 5, 9:45 PM', daysAgo: 4, icon: 'settings-outline', emoji: '⚙️', iconBg: '#3bbfa3' },
+  { id: 'a10', type: 'ride', title: 'Constant Spring → Liguanea', subtitle: 'Devon P. · $4.90', time: 'Apr 5, 7:20 PM', daysAgo: 4, icon: 'car', iconBg: '#52b788', rideData: { id: 'r5', from: 'Constant Spring', to: 'Liguanea', date: 'Apr 5, 7:20 PM', price: '$4.90', driver: 'Devon P.', rating: 5 } },
+  { id: 'a11', type: 'payment', title: 'Mastercard removed', subtitle: '····7890 · Payment method', time: 'Apr 2, 2:00 PM', daysAgo: 7, icon: 'card-outline', emoji: '💳', iconBg: '#e25c6a' },
+  { id: 'a12', type: 'profile', title: 'Email address updated', subtitle: 'Account security changed', time: 'Mar 30, 11:00 AM', daysAgo: 10, icon: 'mail-outline', emoji: '📧', iconBg: '#4a90e2' },
+  { id: 'a13', type: 'ride', title: 'Portmore → Liguanea', subtitle: 'Marcus W. · $9.50', time: 'Mar 28, 6:15 PM', daysAgo: 12, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r6', from: 'Portmore', to: 'Liguanea', date: 'Mar 28, 6:15 PM', price: '$9.50', driver: 'Marcus W.', rating: 5 } },
+];
 
 const mockFavouritePlaces = [
   { id: 'f1', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' as const },
@@ -436,6 +473,7 @@ export default function MainScreen() {
   const [activeTab, setActiveTab] = useState('home');
   const [activitySearch, setActivitySearch] = useState('');
   const [activitySearchOpen, setActivitySearchOpen] = useState(false);
+  const [activityFilter, setActivityFilter] = useState<'all' | 'today' | 'yesterday' | '7days' | 'month'>('all');
   const [favSearch, setFavSearch] = useState('');
   const [favSearchOpen, setFavSearchOpen] = useState(false);
   const [selectedRideDetail, setSelectedRideDetail] = useState<typeof mockRideHistory[0] | null>(null);
@@ -2695,7 +2733,7 @@ export default function MainScreen() {
                   style={[styles.tabSearchInput, { color: ui.text }]}
                   value={activitySearch}
                   onChangeText={setActivitySearch}
-                  placeholder="Search rides..."
+                  placeholder="Search activity..."
                   placeholderTextColor={ui.placeholder}
                   autoFocus
                   autoCorrect={false}
@@ -2704,36 +2742,56 @@ export default function MainScreen() {
             ) : null}
           </View>
           <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
-            {mockRideHistory
-              .filter(ride => !activitySearch.trim() || [ride.from, ride.to, ride.driver].some(s => s.toLowerCase().includes(activitySearch.toLowerCase())))
-              .map((ride, i, arr) => (
-              <View key={ride.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-                <Pressable style={styles.rideHistoryItem} onPress={() => setSelectedRideDetail(ride)}>
-                  <View style={[styles.rideHistoryIconWrap, { backgroundColor: driverAvatar(ride.driver).color }]}>
-                    <Text style={styles.rideHistoryAvatarText}>{driverAvatar(ride.driver).initials}</Text>
-                  </View>
-                  <View style={styles.rideHistoryBody}>
-                    <Text style={[styles.rideHistoryRoute, { color: ui.text }]} numberOfLines={1}>
-                      {ride.from} → {ride.to}
-                    </Text>
-                    <Text style={[styles.rideHistoryMeta, { color: ui.textMuted }]}>{ride.date} · {ride.driver}</Text>
-                    <View style={styles.rideHistoryStars}>
-                      {Array.from({ length: 5 }).map((_, s) => (
-                        <Ionicons key={s} name={s < ride.rating ? 'star' : 'star-outline'} size={12} color="#ffd54a" />
-                      ))}
-                    </View>
-                  </View>
-                  <LinearGradient
-                    colors={['#FFE033', '#FFB800']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.rideViewPill}
-                  >
-                    <Text style={styles.rideViewPillText}>View</Text>
-                  </LinearGradient>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activityFilterRow} contentContainerStyle={styles.activityFilterContent}>
+              {ACTIVITY_FILTERS.map(f => (
+                <Pressable
+                  key={f.key}
+                  style={[styles.activityFilterPill, activityFilter === f.key && styles.activityFilterPillActive]}
+                  onPress={() => setActivityFilter(f.key)}
+                >
+                  <Text style={[styles.activityFilterPillText, activityFilter === f.key && styles.activityFilterPillTextActive]}>{f.label}</Text>
                 </Pressable>
-              </View>
-            ))}
+              ))}
+            </ScrollView>
+            {(() => {
+              const filtered = mockActivityFeed.filter(item => {
+                const s = activitySearch.trim().toLowerCase();
+                if (s && ![item.title, item.subtitle].some(t => t.toLowerCase().includes(s))) return false;
+                if (activityFilter === 'today') return item.daysAgo === 0;
+                if (activityFilter === 'yesterday') return item.daysAgo === 1;
+                if (activityFilter === '7days') return item.daysAgo <= 6;
+                if (activityFilter === 'month') return item.daysAgo <= 30;
+                return true;
+              });
+              if (filtered.length === 0) {
+                return <Text style={[styles.activityEmpty, { color: ui.textMuted }]}>No activity found</Text>;
+              }
+              const nodes: JSX.Element[] = [];
+              let lastGroup = '';
+              filtered.forEach(item => {
+                const group = item.daysAgo === 0 ? 'Today' : item.daysAgo === 1 ? 'Yesterday' : item.daysAgo <= 6 ? 'Earlier This Week' : 'Last Month';
+                if (group !== lastGroup) {
+                  nodes.push(
+                    <Text key={`grp-${group}`} style={[styles.activityGroupHeader, { color: ui.textMuted }]}>{group}</Text>
+                  );
+                  lastGroup = group;
+                }
+                nodes.push(
+                  <Pressable key={item.id} style={[styles.tabCard, { backgroundColor: ui.cardBg }]} onPress={() => item.rideData ? setSelectedRideDetail(item.rideData) : null}>
+                    <View style={styles.activityCardContent}>
+                      <View style={styles.activityCardRow}>
+                        <Text style={[styles.activityCardTitle, { color: ui.text }]} numberOfLines={1}>{item.title}</Text>
+                        {item.type === 'ride'
+                          ? <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                          : null}
+                      </View>
+                      <Text style={[styles.activityCardSub, { color: ui.textMuted }]}>{item.subtitle} · {item.time}</Text>
+                    </View>
+                  </Pressable>
+                );
+              });
+              return nodes;
+            })()}
           </ScrollView>
         </View>
       ) : null}
@@ -4011,6 +4069,72 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginLeft: 4,
   },
+  // Activity filter pills
+  activityFilterRow: {
+    marginBottom: 4,
+  },
+  activityFilterContent: {
+    gap: 8,
+    paddingBottom: 2,
+  },
+  activityFilterPill: {
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#FFD000',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  activityFilterPillActive: {
+    backgroundColor: '#FFD000',
+    borderWidth: 0,
+  },
+  activityFilterPillText: {
+    color: '#000000',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  activityFilterPillTextActive: {
+    color: '#000000',
+    fontWeight: '800',
+  },
+  activityGroupHeader: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: 16,
+    marginBottom: 4,
+    marginLeft: 4,
+  },
+  activityItemEmoji: {
+    fontSize: 20,
+  },
+  activityCardContent: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 5,
+  },
+  activityCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  activityCardTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  activityCardSub: {
+    fontSize: 13,
+    fontWeight: '400',
+  },
+  activityEmpty: {
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '500',
+    marginTop: 60,
+  },
   // Ride Detail Modal
   rideDetailOverlay: {
     flex: 1,
@@ -4103,9 +4227,13 @@ const styles = StyleSheet.create({
   },
   tabCard: {
     borderRadius: 18,
-    borderWidth: 1,
     overflow: 'hidden',
-    marginBottom: 4,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    elevation: 2,
   },
   tabDivider: {
     height: 1,
