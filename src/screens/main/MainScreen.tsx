@@ -12,6 +12,7 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -35,6 +36,22 @@ import {
 import { addCardPreviewAsset, greyCarAsset } from '../../assets/images';
 import { AUTH_SESSION_KEY, useAuth } from '../../context/AuthContext';
 import { useAppTheme } from '../../theme/ThemeProvider';
+import SupportTicketScreen from './SupportTicketScreen';
+import { usePushToken } from '../../hooks/usePushToken';
+
+const mockRideHistory = [
+  { id: 'r1', from: 'Half-Way Tree', to: 'Norman Manley Airport', date: 'Today, 9:14 AM', price: '$12.40', driver: 'Marcus W.', rating: 5 },
+  { id: 'r2', from: 'New Kingston', to: 'Portmore Mall', date: 'Yesterday, 3:45 PM', price: '$8.20', driver: 'Diana R.', rating: 4 },
+  { id: 'r3', from: 'Liguanea', to: 'Half-Way Tree', date: 'Apr 7, 11:30 AM', price: '$5.10', driver: 'Trevor A.', rating: 5 },
+  { id: 'r4', from: 'Downtown Kingston', to: 'New Kingston', date: 'Apr 6, 8:00 AM', price: '$6.80', driver: 'Sandra M.', rating: 4 },
+  { id: 'r5', from: 'Constant Spring', to: 'Liguanea', date: 'Apr 5, 7:20 PM', price: '$4.90', driver: 'Devon P.', rating: 5 },
+];
+
+const mockFavouritePlaces = [
+  { id: 'f1', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' as const },
+  { id: 'f2', title: 'Sovereign Centre', subtitle: 'Hope Road, Kingston', icon: 'storefront' as const },
+  { id: 'f3', title: 'University of the West Indies', subtitle: 'Mona, Kingston', icon: 'business' as const },
+];
 
 const rideOptions = [
   {
@@ -395,10 +412,15 @@ function ProfileIcon({ size, color = '#171717' }: { size: number; color?: string
 
 export default function MainScreen() {
   const { signOut } = useAuth();
-  const { colors, isDark } = useAppTheme();
+  const { colors, isDark, themeOverride, setThemeOverride } = useAppTheme();
+  usePushToken();
   const [selectedRide, setSelectedRide] = useState('ride');
   const [activeTab, setActiveTab] = useState('home');
-  const [screen, setScreen] = useState<'home' | 'profile' | 'profileEdit'>('home');
+  const [screen, setScreen] = useState<
+    'home' | 'profile' | 'profileEdit' |
+    'settingsNotifications' | 'settingsPassword' | 'settingsLanguage' |
+    'settingsAppearance' | 'settingsHelp' | 'settingsTerms' | 'settingsSupport'
+  >('home');
   const [mapExpanded, setMapExpanded] = useState(false);
   const [sheetMinimized, setSheetMinimized] = useState(false);
   const sheetMinimizedRef = useRef(false);
@@ -431,6 +453,7 @@ export default function MainScreen() {
   const [addressInput, setAddressInput] = useState('');
   const [destinationQuery, setDestinationQuery] = useState('');
   const [destinationFocused, setDestinationFocused] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
   const destinationInputRef = useRef<TextInput>(null);
   const [toQuery, setToQuery] = useState('');
   const [toFocused, setToFocused] = useState(false);
@@ -448,6 +471,24 @@ export default function MainScreen() {
 
   // Support modal
   const [supportVisible, setSupportVisible] = useState(false);
+
+  // Settings modals
+  const [notifRideUpdates, setNotifRideUpdates] = useState(true);
+  const [notifDriverArrival, setNotifDriverArrival] = useState(true);
+  const [notifTripReceipt, setNotifTripReceipt] = useState(true);
+  const [notifPromos, setNotifPromos] = useState(false);
+  const [notifNewFeatures, setNotifNewFeatures] = useState(true);
+  const [notifSurveys, setNotifSurveys] = useState(false);
+  const [notifSecurity, setNotifSecurity] = useState(true);
+  const [notifPayments, setNotifPayments] = useState(true);
+  const [notifModalVisible, setNotifModalVisible] = useState(false);
+  const [changePwModalVisible, setChangePwModalVisible] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [langModalVisible, setLangModalVisible] = useState(false);
+  const [selectedLang, setSelectedLang] = useState('English');
+  const [helpModalVisible, setHelpModalVisible] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
 
   // Payment cards (shown on profile)
   const [cards, setCards] = useState<ProfileCard[]>(DEFAULT_PROFILE_CARDS);
@@ -1168,9 +1209,28 @@ export default function MainScreen() {
 
   const sheetMinimizeRange = Math.max(SHEET_MINIMIZED_OFFSET, 1);
   /** Sheet up → shorter map; sheet lowered → map uses full window (no dead strip). */
-  const mapHeightAnim = minimizedTranslateY.interpolate({
+  const minimizedMapH = minimizedTranslateY.interpolate({
     inputRange: [0, sheetMinimizeRange],
     outputRange: [MAP_HEIGHT, SCREEN_HEIGHT],
+    extrapolate: 'clamp',
+  });
+  /** Expand map to full screen while search is focused so it shows behind the sheet */
+  const searchMapExpansion = destinationLiftAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, SCREEN_HEIGHT - MAP_HEIGHT],
+    extrapolate: 'clamp',
+  });
+  const mapHeightAnim = Animated.add(minimizedMapH, searchMapExpansion);
+  /** Clip the sheet height when searching so the map is visible below the search card */
+  const searchSheetMaxHeight = destinationLiftAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [BOTTOM_SHEET_HEIGHT, 420],
+    extrapolate: 'clamp',
+  });
+  /** Fade the sheet panel background out when search is focused so map shows through */
+  const sheetBgOpacity = destinationLiftAnim.interpolate({
+    inputRange: [0, 0.6],
+    outputRange: [1, 0],
     extrapolate: 'clamp',
   });
 
@@ -1181,6 +1241,22 @@ export default function MainScreen() {
       useNativeDriver: false,
       friction: 9,
       tension: 70,
+    }).start();
+  };
+
+  const collapseSearchMode = () => {
+    destinationFocusedRef.current = false;
+    toFocusedRef.current = false;
+    setDestinationFocused(false);
+    setToFocused(false);
+    setSearchExpanded(false);
+    destinationInputRef.current?.blur();
+    toInputRef.current?.blur();
+    Animated.spring(destinationLiftAnim, {
+      toValue: 0,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 65,
     }).start();
   };
 
@@ -1245,6 +1321,7 @@ export default function MainScreen() {
     }
     destinationFocusedRef.current = true;
     setDestinationFocused(true);
+    setSearchExpanded(true);
     Animated.spring(destinationLiftAnim, {
       toValue: 1,
       useNativeDriver: false,
@@ -1257,14 +1334,6 @@ export default function MainScreen() {
     setTimeout(() => {
       destinationFocusedRef.current = false;
       setDestinationFocused(false);
-      if (!toFocusedRef.current) {
-        Animated.spring(destinationLiftAnim, {
-          toValue: 0,
-          useNativeDriver: false,
-          friction: 8,
-          tension: 65,
-        }).start();
-      }
     }, 220);
   };
 
@@ -1274,6 +1343,7 @@ export default function MainScreen() {
     }
     toFocusedRef.current = true;
     setToFocused(true);
+    setSearchExpanded(true);
     Animated.spring(destinationLiftAnim, {
       toValue: 1,
       useNativeDriver: false,
@@ -1286,14 +1356,6 @@ export default function MainScreen() {
     setTimeout(() => {
       toFocusedRef.current = false;
       setToFocused(false);
-      if (!destinationFocusedRef.current) {
-        Animated.spring(destinationLiftAnim, {
-          toValue: 0,
-          useNativeDriver: false,
-          friction: 8,
-          tension: 65,
-        }).start();
-      }
     }, 220);
   };
 
@@ -1302,14 +1364,6 @@ export default function MainScreen() {
     destinationInputRef.current?.blur();
     destinationFocusedRef.current = false;
     setDestinationFocused(false);
-    if (!toFocusedRef.current) {
-      Animated.spring(destinationLiftAnim, {
-        toValue: 0,
-        useNativeDriver: false,
-        friction: 8,
-        tension: 65,
-      }).start();
-    }
   };
 
   const selectTo = (value: string) => {
@@ -1318,19 +1372,11 @@ export default function MainScreen() {
     toInputRef.current?.blur();
     toFocusedRef.current = false;
     setToFocused(false);
-    if (!destinationFocusedRef.current) {
-      Animated.spring(destinationLiftAnim, {
-        toValue: 0,
-        useNativeDriver: false,
-        friction: 8,
-        tension: 65,
-      }).start();
-    }
   };
 
   const searchSheetTranslateY = destinationLiftAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, -(MAP_HEIGHT - 118)],
+    outputRange: [0, -(MAP_HEIGHT - 128)],
   });
 
   // ── Profile (read-only) ─────────────────────────────────────────
@@ -1374,13 +1420,6 @@ export default function MainScreen() {
             </View>
             <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
             <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
-              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>User ID</Text>
-              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={3}>
-                {shortUserId || '—'}
-              </Text>
-            </View>
-            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
-            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
               <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Email</Text>
               <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={4}>
                 {userEmail.trim() ? userEmail : '—'}
@@ -1391,13 +1430,6 @@ export default function MainScreen() {
               <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Phone</Text>
               <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={3}>
                 {userPhoneE164 ? formatE164International(userPhoneE164) : '—'}
-              </Text>
-            </View>
-            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
-            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
-              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Saved places</Text>
-              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={5}>
-                {savedPlacesSummary}
               </Text>
             </View>
           </View>
@@ -1721,6 +1753,304 @@ export default function MainScreen() {
       </View>
     );
   }
+
+  // ── Settings sub-screens ─────────────────────────────────────────
+
+  if (screen === 'settingsNotifications') {
+    return (
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
+          </Pressable>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Notifications</Text>
+          <View style={styles.editProfileHeaderSide} />
+        </View>
+        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
+
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Trips</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Ride updates</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Status changes & driver info</Text>
+              </View>
+              <Switch value={notifRideUpdates} onValueChange={setNotifRideUpdates} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Driver arrival</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Alert when your driver is nearby</Text>
+              </View>
+              <Switch value={notifDriverArrival} onValueChange={setNotifDriverArrival} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Trip receipts</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Email & in-app receipt after each trip</Text>
+              </View>
+              <Switch value={notifTripReceipt} onValueChange={setNotifTripReceipt} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+          </View>
+
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Promotions</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Deals & offers</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Discounts and promo codes</Text>
+              </View>
+              <Switch value={notifPromos} onValueChange={setNotifPromos} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>New features</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Product updates and announcements</Text>
+              </View>
+              <Switch value={notifNewFeatures} onValueChange={setNotifNewFeatures} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Surveys & feedback</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Help us improve Ridr</Text>
+              </View>
+              <Switch value={notifSurveys} onValueChange={setNotifSurveys} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+          </View>
+
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Account</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Security alerts</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Sign-ins and password changes</Text>
+              </View>
+              <Switch value={notifSecurity} onValueChange={setNotifSecurity} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+            <View style={styles.notifRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Payment activity</Text>
+                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Charges, refunds & payment issues</Text>
+              </View>
+              <Switch value={notifPayments} onValueChange={setNotifPayments} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
+            </View>
+          </View>
+
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (screen === 'settingsPassword') {
+    return (
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
+          </Pressable>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Change Password</Text>
+          <View style={styles.editProfileHeaderSide} />
+        </View>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, marginTop: 20, padding: 16, gap: 12 }]}>
+              <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>New password</Text>
+              <TextInput
+                style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
+                value={newPassword}
+                onChangeText={setNewPassword}
+                placeholder="At least 6 characters"
+                placeholderTextColor={ui.placeholder}
+                secureTextEntry
+                autoComplete="password-new"
+              />
+              <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Confirm password</Text>
+              <TextInput
+                style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                placeholder="Repeat new password"
+                placeholderTextColor={ui.placeholder}
+                secureTextEntry
+              />
+            </View>
+            <Pressable
+              style={[styles.modalSaveBtn, { marginTop: 24, backgroundColor: ui.text }]}
+              onPress={() => {
+                if (!newPassword || newPassword.length < 6) { Alert.alert('Password', 'Use at least 6 characters.'); return; }
+                if (newPassword !== confirmPassword) { Alert.alert('Password', 'Passwords do not match.'); return; }
+                Alert.alert('Password', 'Password updated successfully.');
+                setNewPassword('');
+                setConfirmPassword('');
+                setScreen('home');
+              }}
+            >
+              <Text style={[styles.modalSaveBtnText, { color: ui.screenBg }]}>Update Password</Text>
+            </Pressable>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
+    );
+  }
+
+  if (screen === 'settingsLanguage') {
+    const langs = ['English', 'Spanish', 'French', 'Patois'];
+    return (
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
+          </Pressable>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Language</Text>
+          <View style={styles.editProfileHeaderSide} />
+        </View>
+        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, marginTop: 20 }]}>
+            {langs.map((lang, i) => (
+              <View key={lang}>
+                <Pressable
+                  style={[styles.settingsRow, { paddingVertical: 16 }]}
+                  onPress={() => { setSelectedLang(lang); setScreen('home'); }}
+                >
+                  <Text style={[styles.settingsRowLabel, { color: ui.text }]}>{lang}</Text>
+                  {selectedLang === lang
+                    ? <Ionicons name="checkmark-circle" size={22} color={ui.ctaBg} />
+                    : <Ionicons name="ellipse-outline" size={22} color={ui.textMuted} />}
+                </Pressable>
+                {i < langs.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (screen === 'settingsAppearance') {
+    const options: Array<{ label: string; value: import('../../theme/ThemeProvider').ThemeOverride; icon: string }> = [
+      { label: 'System default', value: 'system', icon: 'phone-portrait-outline' },
+      { label: 'Light', value: 'light', icon: 'sunny-outline' },
+      { label: 'Dark', value: 'dark', icon: 'moon-outline' },
+    ];
+    return (
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
+          </Pressable>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Appearance</Text>
+          <View style={styles.editProfileHeaderSide} />
+        </View>
+        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Theme</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            {options.map((opt, i) => (
+              <View key={opt.value}>
+                <Pressable
+                  style={[styles.settingsRow, { paddingVertical: 16 }]}
+                  onPress={() => setThemeOverride(opt.value)}
+                >
+                  <Ionicons name={opt.icon as never} size={20} color={ui.text} />
+                  <Text style={[styles.settingsRowLabel, { color: ui.text }]}>{opt.label}</Text>
+                  {themeOverride === opt.value
+                    ? <Ionicons name="checkmark-circle" size={22} color={ui.ctaBg} />
+                    : <Ionicons name="ellipse-outline" size={22} color={ui.textMuted} />}
+                </Pressable>
+                {i < options.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (screen === 'settingsHelp') {
+    const faqs = [
+      'How do I book a ride?',
+      'How do I cancel a trip?',
+      'How do I update my payment method?',
+      'I have a complaint about a driver.',
+    ];
+    return (
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
+          </Pressable>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Help Centre</Text>
+          <View style={styles.editProfileHeaderSide} />
+        </View>
+        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Frequently asked questions</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            {faqs.map((q, i) => (
+              <View key={q}>
+                <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => Alert.alert('Help', q)}>
+                  <Ionicons name="chatbubble-outline" size={20} color={ui.text} />
+                  <Text style={[styles.settingsRowLabel, { color: ui.text, fontWeight: '500' }]}>{q}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                </Pressable>
+                {i < faqs.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+              </View>
+            ))}
+          </View>
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Still need help?</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => setScreen('settingsSupport')}>
+              <Ionicons name="headset-outline" size={20} color={ui.text} />
+              <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Contact Support</Text>
+              <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+            </Pressable>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (screen === 'settingsSupport') {
+    return <SupportTicketScreen ui={ui} isDark={isDark} userEmail={userEmail} userFirstName={userFirstName} onBack={() => setScreen('home')} />;
+  }
+
+  if (screen === 'settingsTerms') {
+    return (
+      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
+          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
+            <Ionicons name="arrow-back" size={24} color={ui.text} />
+          </Pressable>
+          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Terms & Privacy</Text>
+          <View style={styles.editProfileHeaderSide} />
+        </View>
+        <ScrollView style={styles.editProfileScroll} contentContainerStyle={[styles.editProfileScrollContent, { paddingTop: 20 }]} showsVerticalScrollIndicator={false}>
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Terms of Service</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, padding: 16 }]}>
+            <Text style={[styles.notifRowSub, { color: ui.text, lineHeight: 22 }]}>
+              {`By using Ridr, you agree to our Terms of Service. We collect location data to provide ride services and improve the app experience.\n\nRidr reserves the right to update these terms. Continued use of the app constitutes acceptance of any changes.`}
+            </Text>
+          </View>
+          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Privacy Policy</Text>
+          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, padding: 16 }]}>
+            <Text style={[styles.notifRowSub, { color: ui.text, lineHeight: 22 }]}>
+              {`Your personal data is never sold to third parties. You may request deletion of your data at any time by contacting support@ridr.app.`}
+            </Text>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
   // ────────────────────────────────────────────────────────────────
 
   return (
@@ -1732,6 +2062,11 @@ export default function MainScreen() {
         <MapView
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           style={StyleSheet.absoluteFillObject}
+          onPress={() => {
+            if (searchExpanded) {
+              collapseSearchMode();
+            }
+          }}
           region={{
             latitude: mapCenter.latitude,
             longitude: mapCenter.longitude,
@@ -1866,8 +2201,8 @@ export default function MainScreen() {
         </View>
       </Modal>
 
-      {/* Header — floats over map */}
-      <View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay }]}>
+      {/* Header — floats over map, fades out when searching */}
+      <Animated.View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay, opacity: sheetBgOpacity }]} pointerEvents={searchExpanded ? 'none' : 'auto'}>
         <View style={styles.headerRow}>
           <View style={styles.profileBlock}>
             <Pressable style={[styles.profileIconShell, { backgroundColor: ui.softBg }]} onPress={openProfile}>
@@ -1878,11 +2213,11 @@ export default function MainScreen() {
               <Text style={[styles.userName, { color: ui.text }]}>{displayName}</Text>
             </View>
           </View>
-          <Pressable style={[styles.supportButton, { backgroundColor: isDark ? '#2b2b31' : '#171717' }]} onPress={() => setSupportVisible(true)}>
+          <Pressable style={[styles.supportButton, { backgroundColor: isDark ? '#2b2b31' : '#171717' }]} onPress={() => setScreen('settingsSupport')}>
             <SupportIcon color={isDark ? ui.text : '#ffffff'} />
           </Pressable>
         </View>
-      </View>
+      </Animated.View>
 
       {/* Profile Modal — replaced by full screen, block removed */}
 
@@ -1913,43 +2248,11 @@ export default function MainScreen() {
         </View>
       </Modal>
 
-      {/* Support Modal */}
-      <Modal visible={supportVisible} animationType="slide" transparent statusBarTranslucent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.supportModalIcon}>
-              <Ionicons name="headset" size={36} color="#171717" />
-            </View>
-            <Text style={styles.modalTitle}>Customer Support</Text>
-            <Text style={styles.supportModalSubtitle}>We're here to help 24/7. Choose how you'd like to reach us.</Text>
-            <Pressable style={styles.supportOption}>
-              <Ionicons name="chatbubble-ellipses" size={22} color="#171717" />
-              <Text style={styles.supportOptionText}>Live Chat</Text>
-              <Ionicons name="chevron-forward" size={18} color="#ccc" />
-            </Pressable>
-            <Pressable style={styles.supportOption}>
-              <Ionicons name="call" size={22} color="#171717" />
-              <Text style={styles.supportOptionText}>Call Us</Text>
-              <Ionicons name="chevron-forward" size={18} color="#ccc" />
-            </Pressable>
-            <Pressable style={styles.supportOption}>
-              <Ionicons name="mail" size={22} color="#171717" />
-              <Text style={styles.supportOptionText}>Email Support</Text>
-              <Ionicons name="chevron-forward" size={18} color="#ccc" />
-            </Pressable>
-            <Pressable style={styles.modalCancelBtn} onPress={() => setSupportVisible(false)}>
-              <Text style={styles.modalCancelBtnText}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
       {/* Bottom sheet — scrollable cards */}
       <Animated.View
         style={[
           styles.contentScroll,
-          { backgroundColor: ui.panelBg },
+          { backgroundColor: 'transparent', maxHeight: searchSheetMaxHeight, overflow: 'hidden' },
           {
             transform: [
               {
@@ -1958,35 +2261,81 @@ export default function MainScreen() {
             ],
           },
         ]}
-        {...(!(toFocused || destinationFocused) ? panResponder.panHandlers : {})}
+        {...(!searchExpanded ? panResponder.panHandlers : {})}
       >
+        {/* Panel background — fades out when search is focused so map shows through */}
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFillObject, { backgroundColor: ui.panelBg, borderTopLeftRadius: 28, borderTopRightRadius: 28, opacity: sheetBgOpacity }]}
+        />
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
         bounces={true}
+        scrollEnabled={!searchExpanded}
         onScroll={(e) => {
           scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
         }}
       >
         {/* Drag handle */}
-        <View style={styles.dragHandleZone}>
-          <View style={styles.dragHandle} />
-        </View>
+        {!searchExpanded ? (
+          <View style={styles.dragHandleZone}>
+            <View style={styles.dragHandle} />
+          </View>
+        ) : null}
 
         {/* Destination Input Card */}
-        <View style={[styles.destinationCard, { backgroundColor: ui.cardBg }]}>
-          <View style={[styles.destinationSearchGroup, { backgroundColor: ui.softBg }]}>
+        <View style={[
+          styles.destinationCard, 
+          { backgroundColor: searchExpanded ? 'transparent' : ui.cardBg },
+          searchExpanded
+            ? {
+                shadowOpacity: 0,
+                elevation: 0,
+                paddingHorizontal: 0,
+                paddingVertical: 0,
+                marginBottom: 0,
+                position: 'absolute',
+                top: -10,
+                left: 0,
+                right: 0,
+                zIndex: 8,
+              }
+            : {}
+        ]}>
+          <View style={[
+            styles.destinationSearchGroup, 
+            { backgroundColor: searchExpanded ? 'transparent' : ui.softBg },
+            searchExpanded ? { gap: 10, overflow: 'visible' } : {}
+          ]}>
+            <View pointerEvents="none" style={styles.searchConnector}>
+              <View style={styles.searchConnectorTopDot} />
+              <View style={styles.searchConnectorLine} />
+              <View style={styles.searchConnectorBottomPinOuter}>
+                <View style={styles.searchConnectorBottomPinInner} />
+              </View>
+            </View>
+
             <View
               style={[
                 styles.whereToRow,
-                styles.whereToRowTop,
+                !searchExpanded && styles.whereToRowTop,
+                searchExpanded
+                  && {
+                    borderRadius: 0,
+                    borderWidth: 0,
+                    borderTopWidth: 0,
+                    borderBottomWidth: 2.5,
+                    borderBottomColor: '#171717',
+                    marginLeft: 28,
+                    marginRight: 14,
+                  },
                 toFocused ? styles.whereToRowActive : null,
-                { backgroundColor: isDark ? '#22242a' : undefined },
+                { backgroundColor: searchExpanded ? (isDark ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.66)') : (isDark ? '#22242a' : undefined) },
               ]}
             >
-              <Ionicons name="location-outline" size={18} color={toFocused ? ui.text : ui.textMuted} />
               <TextInput
                 ref={toInputRef}
                 style={[styles.whereToInput, { color: ui.text }]}
@@ -2003,17 +2352,27 @@ export default function MainScreen() {
                 autoCorrect={false}
                 autoCapitalize="words"
               />
+              {!searchExpanded ? <View style={styles.whereToBottomLine} /> : null}
             </View>
 
             <View
               style={[
                 styles.whereToRow,
-                styles.whereToRowBottom,
+                !searchExpanded && styles.whereToRowBottom,
+                searchExpanded
+                  && {
+                    borderRadius: 0,
+                    borderTopWidth: 0,
+                    borderWidth: 0,
+                    borderBottomWidth: 2.5,
+                    borderBottomColor: '#171717',
+                    marginLeft: 28,
+                    marginRight: 14,
+                  },
                 destinationFocused ? styles.whereToRowActive : null,
-                { backgroundColor: isDark ? '#22242a' : undefined },
+                { backgroundColor: searchExpanded ? (isDark ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.66)') : (isDark ? '#22242a' : undefined) },
               ]}
             >
-              <Ionicons name="search" size={18} color={destinationFocused ? ui.text : ui.textMuted} />
               <TextInput
                 ref={destinationInputRef}
                 style={[styles.whereToInput, { color: ui.text }]}
@@ -2027,18 +2386,25 @@ export default function MainScreen() {
                 autoCorrect={false}
                 autoCapitalize="words"
               />
-              <View style={[styles.nowBadge, { backgroundColor: ui.ctaBg }]}>
-                <Text style={[styles.nowText, { color: ui.ctaText }]}>Go ▾</Text>
-              </View>
+              {!searchExpanded ? <View style={[styles.whereToBottomLine, styles.whereToBottomLineFocused]} /> : null}
             </View>
           </View>
+
+          {searchExpanded ? (
+            <View style={styles.searchActionRow}>
+              <Pressable style={[styles.nowBadge, styles.searchActionBadge, { backgroundColor: ui.ctaBg }]}>
+                <Text style={[styles.nowText, { color: ui.ctaText }]}>Go ▾</Text>
+              </Pressable>
+            </View>
+          ) : null}
 
           {hasRouteInputs && routeIssue ? (
             <Text style={styles.routeIssueText}>{routeIssue}</Text>
           ) : null}
 
           {toFocused && filteredToSuggestions.length > 0 ? (
-            <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <View style={[styles.suggestionList, { backgroundColor: 'transparent', borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', overflow: 'hidden' }]}>
+              <BlurView intensity={isDark ? 65 : 80} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
               {filteredToSuggestions.map((item, index) => (
                 <View key={item.id}>
                   <Pressable style={styles.suggestionItem} onPressIn={() => selectTo(item.fullText ?? item.title)}>
@@ -2058,7 +2424,8 @@ export default function MainScreen() {
           ) : null}
 
           {destinationFocused && filteredSuggestions.length > 0 ? (
-            <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+            <View style={[styles.suggestionList, { backgroundColor: 'transparent', borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', overflow: 'hidden' }]}>
+              <BlurView intensity={isDark ? 65 : 80} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
               {filteredSuggestions.map((item, index) => (
                 <View key={item.id}>
                   <Pressable style={styles.suggestionItem} onPressIn={() => selectDestination(item.fullText ?? item.title)}>
@@ -2077,7 +2444,7 @@ export default function MainScreen() {
             </View>
           ) : null}
 
-          {!destinationFocused && !toFocused ? <View style={[styles.addressList, { backgroundColor: ui.cardBg }]}>
+          {!searchExpanded ? <View style={[styles.addressList, { backgroundColor: ui.cardBg }]}>
             <Pressable style={styles.addressItem} onPress={() => openAddress('home')}>
               <View style={[styles.addressIconHome, { backgroundColor: isDark ? '#2b2b31' : undefined }]}>
                 <Ionicons name="home" size={14} color={ui.text} />
@@ -2103,7 +2470,7 @@ export default function MainScreen() {
         </View>
 
         {/* Service Type Cards */}
-        <View style={styles.serviceRow}>
+        {!searchExpanded ? <View style={styles.serviceRow}>
           {(
             [
               { id: 'ride', label: 'Ride', sub: '2 min away', discount: '10%' },
@@ -2144,9 +2511,10 @@ export default function MainScreen() {
               </Pressable>
             );
           })}
-        </View>
+        </View> : null}
 
         {/* Promotional Card */}
+        {!searchExpanded ? (
         <View style={[styles.promoCard, { backgroundColor: isDark ? '#151517' : undefined }]}>
           <View style={styles.promoContent}>
             <Text style={[styles.promoTitle, { color: isDark ? ui.text : undefined }]}>Invest today. Secure a{'\n'}healthy tomorrow &{'\n'}every day.</Text>
@@ -2160,8 +2528,175 @@ export default function MainScreen() {
             <View style={styles.promoBox3} />
           </View>
         </View>
+        ) : null}
       </ScrollView>
       </Animated.View>
+
+      {/* ── Activity Tab ────────────────────────────────────── */}
+      {activeTab === 'activity' ? (
+        <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
+          <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
+            <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Activity</Text>
+          </View>
+          <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
+            {mockRideHistory.map((ride, i) => (
+              <View key={ride.id}>
+                <View style={[styles.rideHistoryItem, { backgroundColor: ui.cardBg }]}>
+                  <View style={[styles.rideHistoryIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
+                    <Ionicons name="car" size={20} color={ui.text} />
+                  </View>
+                  <View style={styles.rideHistoryBody}>
+                    <Text style={[styles.rideHistoryRoute, { color: ui.text }]} numberOfLines={1}>
+                      {ride.from} → {ride.to}
+                    </Text>
+                    <Text style={[styles.rideHistoryMeta, { color: ui.textMuted }]}>{ride.date} · {ride.driver}</Text>
+                    <View style={styles.rideHistoryStars}>
+                      {Array.from({ length: 5 }).map((_, s) => (
+                        <Ionicons key={s} name={s < ride.rating ? 'star' : 'star-outline'} size={12} color="#ffd54a" />
+                      ))}
+                    </View>
+                  </View>
+                  <Text style={[styles.rideHistoryPrice, { color: ui.text }]}>{ride.price}</Text>
+                </View>
+                {i < mockRideHistory.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {/* ── Favourites Tab ──────────────────────────────────── */}
+      {activeTab === 'notifications' ? (
+        <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
+          <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
+            <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Favourites</Text>
+          </View>
+          <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
+            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Saved places</Text>
+            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+              {mockFavouritePlaces.map((place, i) => (
+                <View key={place.id}>
+                  <View style={styles.favItem}>
+                    <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
+                      <Ionicons name={place.icon} size={18} color={ui.text} />
+                    </View>
+                    <View style={styles.favBody}>
+                      <Text style={[styles.favTitle, { color: ui.text }]}>{place.title}</Text>
+                      <Text style={[styles.favSubtitle, { color: ui.textMuted }]}>{place.subtitle}</Text>
+                    </View>
+                    <Ionicons name="heart" size={18} color="#ef4444" />
+                  </View>
+                  {i < mockFavouritePlaces.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+                </View>
+              ))}
+            </View>
+
+            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Frequent routes</Text>
+            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+              {[
+                { from: 'Half-Way Tree', to: 'Norman Manley Airport', count: 6 },
+                { from: 'New Kingston', to: 'Portmore Mall', count: 3 },
+              ].map((route, i, arr) => (
+                <View key={i}>
+                  <View style={styles.favItem}>
+                    <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
+                      <Ionicons name="repeat" size={18} color={ui.text} />
+                    </View>
+                    <View style={styles.favBody}>
+                      <Text style={[styles.favTitle, { color: ui.text }]}>{route.from} → {route.to}</Text>
+                      <Text style={[styles.favSubtitle, { color: ui.textMuted }]}>{route.count} rides</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                  </View>
+                  {i < arr.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {/* ── Settings Tab ────────────────────────────────────── */}
+      {activeTab === 'settings' ? (
+        <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
+          <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
+            <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Settings</Text>
+          </View>
+          <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
+
+            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Account</Text>
+            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+              <Pressable style={styles.settingsRow} onPress={openProfile}>
+                <Ionicons name="person-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Edit Profile</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsPassword')}>
+                <Ionicons name="lock-closed-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Change Password</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsNotifications')}>
+                <Ionicons name="notifications-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Notifications</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+            </View>
+
+            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Preferences</Text>
+            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+              <Pressable style={styles.settingsRow} onPress={openProfile}>
+                <Ionicons name="card-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Payment Methods</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsLanguage')}>
+                <Ionicons name="language-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Language</Text>
+                <View style={styles.settingsRowRight}>
+                  <Text style={[styles.settingsRowValue, { color: ui.textMuted }]}>{selectedLang}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                </View>
+              </Pressable>
+              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsAppearance')}>
+                <Ionicons name="color-palette-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Appearance</Text>
+                <View style={styles.settingsRowRight}>
+                  <Text style={[styles.settingsRowValue, { color: ui.textMuted }]}>
+                    {themeOverride === 'system' ? 'System' : themeOverride === 'light' ? 'Light' : 'Dark'}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+                </View>
+              </Pressable>
+            </View>
+
+            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Support</Text>
+            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsHelp')}>
+                <Ionicons name="help-circle-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Help Centre</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsSupport')}>
+                <Ionicons name="headset-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Contact Support</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsTerms')}>
+                <Ionicons name="document-text-outline" size={20} color={ui.text} />
+                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Terms & Privacy</Text>
+                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
+              </Pressable>
+            </View>
+          </ScrollView>
+        </View>
+      ) : null}
 
       {/* Bottom Navigation Tab Bar */}
       <BlurView intensity={80} tint={isDark ? "dark" : "light"} style={[styles.tabBar, { backgroundColor: isDark ? 'rgba(24,24,28,0.88)' : 'rgba(255,255,255,0.82)' }]}>
@@ -2208,8 +2743,6 @@ const styles = StyleSheet.create({
     top: MAP_HEIGHT - 30,
     left: 0,
     right: 0,
-    bottom: 0,
-    backgroundColor: '#ffffff',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     zIndex: 2,
@@ -2745,14 +3278,18 @@ const styles = StyleSheet.create({
   destinationSearchGroup: {
     borderRadius: 20,
     overflow: 'hidden',
+    position: 'relative',
   },
   whereToRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     backgroundColor: '#f2f2f2',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    height: 52,
+    paddingVertical: 0,
+    paddingLeft: 54,
+    paddingRight: 16,
+    position: 'relative',
   },
   whereToRowTop: {
     borderTopLeftRadius: 20,
@@ -2786,11 +3323,76 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flex: 1,
   },
+  whereToBottomLine: {
+    position: 'absolute',
+    left: 44,
+    right: 14,
+    bottom: 7,
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: '#171717',
+    opacity: 0.9,
+  },
+  whereToBottomLineFocused: {
+    left: 0,
+    right: 0,
+  },
+  searchConnector: {
+    position: 'absolute',
+    left: 17,
+    top: 16,
+    bottom: 16,
+    width: 16,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 2,
+  },
+  searchConnectorTopDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#f4c430',
+    borderWidth: 2,
+    borderColor: '#171717',
+  },
+  searchConnectorLine: {
+    width: 2,
+    flex: 1,
+    marginVertical: 4,
+    backgroundColor: '#171717',
+    borderRadius: 999,
+  },
+  searchConnectorBottomPinOuter: {
+    width: 14,
+    height: 14,
+    borderRadius: 4,
+    backgroundColor: '#171717',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ rotate: '45deg' }],
+  },
+  searchConnectorBottomPinInner: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: '#f4c430',
+  },
+  searchActionRow: {
+    marginTop: 10,
+    marginLeft: 28,
+    marginRight: 14,
+    alignItems: 'flex-end',
+  },
   nowBadge: {
     backgroundColor: '#171717',
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 7,
+  },
+  searchActionBadge: {
+    minWidth: 78,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   nowText: {
     color: '#ffffff',
@@ -2805,7 +3407,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 6,
   },
   suggestionList: {
-    backgroundColor: '#ffffff',
     borderRadius: 20,
     paddingHorizontal: 2,
     paddingVertical: 4,
@@ -3111,6 +3712,164 @@ const styles = StyleSheet.create({
   },
   tabLabelActive: {
     color: '#1a1a1a',
+    fontWeight: '700',
+  },
+  // ── Tab full-screen panels ─────────────────────────────
+  tabScreen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 4,
+  },
+  tabScreenHeader: {
+    paddingTop: 135,
+    paddingBottom: 14,
+    paddingHorizontal: 22,
+    borderBottomWidth: 1,
+  },
+  tabScreenTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  tabScreenContent: {
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    paddingBottom: 120,
+    gap: 6,
+  },
+  tabSectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    marginTop: 12,
+    marginLeft: 4,
+  },
+  tabCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  tabDivider: {
+    height: 1,
+    marginHorizontal: 16,
+  },
+  // Ride history
+  rideHistoryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  rideHistoryIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rideHistoryBody: {
+    flex: 1,
+    gap: 2,
+  },
+  rideHistoryRoute: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  rideHistoryMeta: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  rideHistoryStars: {
+    flexDirection: 'row',
+    gap: 2,
+    marginTop: 2,
+  },
+  rideHistoryPrice: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  // Favourites
+  favItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  favIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  favBody: {
+    flex: 1,
+    gap: 2,
+  },
+  favTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  favSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  // Settings
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    gap: 14,
+  },
+  settingsRowLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  settingsRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  settingsRowValue: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  notifRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  notifRowLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  notifRowSub: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  settingsSignOut: {
+    marginTop: 20,
+    marginHorizontal: 0,
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  settingsSignOutText: {
+    fontSize: 15,
     fontWeight: '700',
   },
   // Edit Profile screen (reference layout)

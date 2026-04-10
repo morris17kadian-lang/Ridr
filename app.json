@@ -25,6 +25,16 @@
     },
     "web": {
       "favicon": "./assets/ridr-logo.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/ridr-logo.png",
+          "color": "#171717",
+          "sounds": []
+        }
+      ]
+    ]
   }
 }

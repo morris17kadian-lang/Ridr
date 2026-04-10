@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react';
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useColorScheme } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export type ThemeOverride = 'system' | 'light' | 'dark';
+const THEME_OVERRIDE_KEY = 'ridr_theme_override';
 
 export type ThemeName = 'light' | 'dark';
 
@@ -53,21 +57,39 @@ type AppTheme = {
   theme: ThemeName;
   isDark: boolean;
   colors: ThemeColors;
+  themeOverride: ThemeOverride;
+  setThemeOverride: (o: ThemeOverride) => void;
 };
 
 const ThemeContext = createContext<AppTheme | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const scheme = useColorScheme();
-  const theme: ThemeName = scheme === 'dark' ? 'dark' : 'light';
+  const [themeOverride, setThemeOverrideState] = useState<ThemeOverride>('system');
+
+  useEffect(() => {
+    AsyncStorage.getItem(THEME_OVERRIDE_KEY).then(v => {
+      if (v === 'light' || v === 'dark' || v === 'system') setThemeOverrideState(v);
+    }).catch(() => {});
+  }, []);
+
+  const setThemeOverride = useCallback((o: ThemeOverride) => {
+    setThemeOverrideState(o);
+    void AsyncStorage.setItem(THEME_OVERRIDE_KEY, o);
+  }, []);
+
+  const effectiveTheme: ThemeName =
+    themeOverride === 'system' ? (scheme === 'dark' ? 'dark' : 'light') : themeOverride;
 
   const value = useMemo<AppTheme>(
     () => ({
-      theme,
-      isDark: theme === 'dark',
-      colors: theme === 'dark' ? darkColors : lightColors,
+      theme: effectiveTheme,
+      isDark: effectiveTheme === 'dark',
+      colors: effectiveTheme === 'dark' ? darkColors : lightColors,
+      themeOverride,
+      setThemeOverride,
     }),
-    [theme]
+    [effectiveTheme, themeOverride, setThemeOverride]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
