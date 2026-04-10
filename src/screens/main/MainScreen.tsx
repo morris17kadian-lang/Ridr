@@ -34,11 +34,17 @@ import {
   validateToE164,
 } from '../../lib/phone';
 import { greyCarAsset } from '../../assets/images';
+import {
+  ACTIVE_TRIP_STORAGE_KEY,
+  BOOKED_RIDES_STORAGE_KEY,
+  PROFILE_ME_CACHE_KEY,
+  clearAppCache,
+} from '../../lib/appCacheStorage';
 import { AUTH_SESSION_KEY, useAuth } from '../../context/AuthContext';
 import { useAppTheme } from '../../theme/ThemeProvider';
 import { ProfileEditScreen } from './profile/ProfileEditScreen';
 import { ProfileScreen } from './profile/ProfileScreen';
-import { DEFAULT_PROFILE_CARDS, type ProfileCard } from './profile/profileTypes';
+import type { ProfileCard } from './profile/profileTypes';
 import { SettingsAppearanceScreen } from './settings/SettingsAppearanceScreen';
 import { NotificationsScreen } from './notifications/NotificationsScreen';
 import { SettingsHelpScreen } from './settings/SettingsHelpScreen';
@@ -73,6 +79,21 @@ import type {
 import { FindingDriverModal } from './ride/FindingDriverModal';
 import { estimateFareUsd } from './ride/rideFare';
 import { interpolateRoutePoint } from './ride/routeGeometry';
+import {
+  countDriversInNearbyResponse,
+  createPaymentMethod,
+  getNearbyDrivers,
+  listPaymentMethods,
+  paymentMethodToDisplay,
+  updatePaymentMethod,
+} from '../../api';
+import {
+  buildKingstonZoneFareEstimateBody,
+  createImmediateRide,
+  getRideRequestById,
+  postFareEstimate,
+} from '../../api/rides';
+import { buildActiveTripFromCreateResponse, mergePollRideRequest } from '../../api/mapRideRequest';
 
 const mockRideHistory = [
   { id: 'r1', from: 'Half-Way Tree', to: 'Norman Manley Airport', date: 'Today, 9:14 AM', price: '$12.40', driver: 'Marcus W.', rating: 5 },
@@ -166,9 +187,6 @@ type MeResponse = {
 
 type BookedRideRecord = TripRecord;
 
-const PROFILE_ME_CACHE_KEY = 'profile_me_cache_v1';
-const ACTIVE_TRIP_STORAGE_KEY = 'active_trip_v1';
-const BOOKED_RIDES_STORAGE_KEY = 'booked_rides_v1';
 const ACTIVE_TRIP_TTL_MS = 5 * 60 * 1000;
 
 function resolveBaseUrl(): string {
@@ -524,7 +542,7 @@ function ProfileIcon({ size, color = '#171717' }: { size: number; color?: string
 // Tab icons use Ionicons (from @expo/vector-icons)
 
 export default function MainScreen() {
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const { colors, isDark, themeOverride, setThemeOverride } = useAppTheme();
   usePushToken();
   const [selectedRide, setSelectedRide] = useState('ride');
@@ -602,21 +620,29 @@ export default function MainScreen() {
   const [originPreviewCoordinate, setOriginPreviewCoordinate] = useState<LatLng | null>(null);
   const [currentLocationLabel, setCurrentLocationLabel] = useState('Current location');
   const [roadRouteCoords, setRoadRouteCoords] = useState<LatLng[]>([]);
+  const [routeEncodedPolyline, setRouteEncodedPolyline] = useState<string | null>(null);
   const [routeAnimatorPoint, setRouteAnimatorPoint] = useState<LatLng | null>(null);
   const [routeIssue, setRouteIssue] = useState<string | null>(null);
   const [routeDurationSec, setRouteDurationSec] = useState(0);
   const [routeDistanceM, setRouteDistanceM] = useState(0);
+  const [backendFareLabel, setBackendFareLabel] = useState<string | null>(null);
+  const [rideRequestSubmitting, setRideRequestSubmitting] = useState(false);
+  const [bookingFor, setBookingFor] = useState<'self' | 'friend'>('self');
+  const [selectedPaymentLabel, setSelectedPaymentLabel] = useState<'Card' | 'Cash'>('Card');
   const [findingDriverVisible, setFindingDriverVisible] = useState(false);
   const [findingDriverPhase, setFindingDriverPhase] = useState<'searching' | 'readySwipe' | 'no_driver_found'>('searching');
   const [activeTrip, setActiveTrip] = useState<ActiveTripState | null>(null);
   const [bookedRides, setBookedRides] = useState<BookedRideRecord[]>([]);
   const [nowMs, setNowMs] = useState(Date.now());
   const [refreshingMain, setRefreshingMain] = useState(false);
+  /** Bumps when user clears cache so `/users/me` is refetched */
+  const [profileCacheNonce, setProfileCacheNonce] = useState(0);
   const toInputRef = useRef<TextInput>(null);
   const toFocusedRef = useRef(false);
   const destinationFocusedRef = useRef(false);
   const toBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destinationBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noDriversNearbyDialogShownRef = useRef(false);
 
   // Support modal
   const [supportVisible, setSupportVisible] = useState(false);
@@ -640,13 +666,99 @@ export default function MainScreen() {
   const [termsModalVisible, setTermsModalVisible] = useState(false);
 
   // Payment cards (shown on profile)
-  const [cards, setCards] = useState<ProfileCard[]>(DEFAULT_PROFILE_CARDS);
-  const [defaultCard, setDefaultCard] = useState('1');
+  const [cards, setCards] = useState<ProfileCard[]>([]);
+  const [defaultCard, setDefaultCard] = useState<string | null>(null);
   const [addCardVisible, setAddCardVisible] = useState(false);
   const [newCardNumber, setNewCardNumber] = useState('');
   const [newCardName, setNewCardName] = useState('');
   const [newCardExpiry, setNewCardExpiry] = useState('');
   const [newCardCvv, setNewCardCvv] = useState('');
+
+  const refreshPaymentMethods = useCallback(async () => {
+    if (!user) {
+      setCards([]);
+      setDefaultCard(null);
+      return;
+    }
+    try {
+      const { paymentMethods } = await listPaymentMethods();
+      if (paymentMethods.length === 0) {
+        setCards([]);
+        setDefaultCard(null);
+        await AsyncStorage.removeItem('profile_cards');
+        await AsyncStorage.removeItem('profile_default_card');
+        return;
+      }
+      const mapped: ProfileCard[] = paymentMethods.map((pm) => paymentMethodToDisplay(pm) as ProfileCard);
+      setCards(mapped);
+      const def = paymentMethods.find((p) => p.isDefault) ?? paymentMethods[0];
+      setDefaultCard(def?.id ?? null);
+      await AsyncStorage.setItem('profile_cards', JSON.stringify(mapped));
+      if (def?.id) await AsyncStorage.setItem('profile_default_card', def.id);
+    } catch {
+      /* offline / session */
+    }
+  }, [user]);
+
+  const selectDefaultCard = useCallback(
+    async (id: string) => {
+      try {
+        await updatePaymentMethod(id, { isDefault: true });
+        setDefaultCard(id);
+        await AsyncStorage.setItem('profile_default_card', id);
+        await refreshPaymentMethods();
+      } catch (e) {
+        Alert.alert('Could not set default card', e instanceof Error ? e.message : 'Try again.');
+      }
+    },
+    [refreshPaymentMethods]
+  );
+
+  const handleClearCache = useCallback(() => {
+    Alert.alert(
+      'Clear cache?',
+      'Removes cached trips, ride history, profile snapshot, and local payment-method copy. You stay signed in.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await clearAppCache();
+                setActiveTrip(null);
+                setBookedRides([]);
+                setCards([]);
+                setDefaultCard(null);
+                setSelectedPaymentLabel('Cash');
+                setScreen((s) => (s === 'activeRide' ? 'home' : s));
+                setProfileCacheNonce((n) => n + 1);
+                await refreshPaymentMethods();
+                Alert.alert('Cache cleared');
+              } catch (e) {
+                Alert.alert('Could not clear cache', e instanceof Error ? e.message : 'Try again.');
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }, [refreshPaymentMethods]);
+
+  useEffect(() => {
+    void refreshPaymentMethods();
+  }, [refreshPaymentMethods]);
+
+  useEffect(() => {
+    const can =
+      cards.length > 0 &&
+      defaultCard != null &&
+      cards.some((c) => c.id === defaultCard);
+    if (selectedPaymentLabel === 'Card' && !can) {
+      setSelectedPaymentLabel('Cash');
+    }
+  }, [selectedPaymentLabel, cards, defaultCard]);
 
   useEffect(() => {
     (async () => {
@@ -660,7 +772,6 @@ export default function MainScreen() {
         savedEmail,
         savedUsername,
         savedCountry,
-        savedCardsJson,
       ] = await Promise.all([
         AsyncStorage.getItem('profile_first_name'),
         AsyncStorage.getItem('profile_last_name'),
@@ -671,7 +782,6 @@ export default function MainScreen() {
         AsyncStorage.getItem('profile_email'),
         AsyncStorage.getItem('profile_username'),
         AsyncStorage.getItem('profile_country_code'),
-        AsyncStorage.getItem('profile_cards'),
       ]);
       if (savedFirst !== null) {
         setUserFirstName(savedFirst);
@@ -703,19 +813,6 @@ export default function MainScreen() {
         if (v.ok) {
           setUserPhoneE164(v.e164);
           await AsyncStorage.setItem('profile_phone_e164', v.e164);
-        }
-      }
-
-      if (savedCardsJson) {
-        try {
-          const parsed = JSON.parse(savedCardsJson) as ProfileCard[];
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setCards(parsed);
-            const defId = await AsyncStorage.getItem('profile_default_card');
-            setDefaultCard(defId && parsed.some(c => c.id === defId) ? defId : parsed[0].id);
-          }
-        } catch {
-          /* keep default */
         }
       }
 
@@ -863,7 +960,7 @@ export default function MainScreen() {
     };
 
     void fetchMe();
-  }, [userCountryCode]);
+  }, [userCountryCode, profileCacheNonce]);
 
   useEffect(() => {
     sheetMinimizedRef.current = sheetMinimized;
@@ -976,6 +1073,7 @@ export default function MainScreen() {
         if (!origin || !destination) {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteEncodedPolyline(null);
             setRouteDurationSec(0);
             setRouteDistanceM(0);
             setRouteIssue(
@@ -988,6 +1086,7 @@ export default function MainScreen() {
         if (!mapsApiKey) {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteEncodedPolyline(null);
             setRouteDurationSec(0);
             setRouteDistanceM(0);
             setRouteIssue(
@@ -1006,6 +1105,7 @@ export default function MainScreen() {
         if (!response.ok) {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteEncodedPolyline(null);
             setRouteDurationSec(0);
             setRouteDistanceM(0);
             setRouteIssue(`Directions HTTP ${response.status}`);
@@ -1025,6 +1125,7 @@ export default function MainScreen() {
         } catch {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteEncodedPolyline(null);
             setRouteDurationSec(0);
             setRouteDistanceM(0);
             setRouteIssue('Could not read directions response.');
@@ -1034,6 +1135,7 @@ export default function MainScreen() {
         if (data.status !== 'OK') {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteEncodedPolyline(null);
             setRouteDurationSec(0);
             setRouteDistanceM(0);
             setRouteIssue(
@@ -1050,17 +1152,20 @@ export default function MainScreen() {
           const decoded = decodeGooglePolyline(encoded);
           if (decoded.length > 1) {
             setRoadRouteCoords(decoded);
+            setRouteEncodedPolyline(encoded);
             setRouteIssue(null);
             setRouteDurationSec(durationSec);
             setRouteDistanceM(distanceM);
           } else if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteEncodedPolyline(null);
             setRouteDurationSec(0);
             setRouteDistanceM(0);
             setRouteIssue('No route geometry returned.');
           }
         } else if (!cancelled) {
           setRoadRouteCoords([]);
+          setRouteEncodedPolyline(null);
           setRouteDurationSec(0);
           setRouteDistanceM(0);
           setRouteIssue('No route geometry returned.');
@@ -1068,6 +1173,7 @@ export default function MainScreen() {
       } catch (err) {
         if (!cancelled) {
           setRoadRouteCoords([]);
+          setRouteEncodedPolyline(null);
           setRouteDurationSec(0);
           setRouteDistanceM(0);
           setRouteIssue(`Failed to fetch road directions: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -1082,12 +1188,8 @@ export default function MainScreen() {
 
   useEffect(() => {
     if (!findingDriverVisible || findingDriverPhase !== 'searching') return;
-    const readyT = setTimeout(() => setFindingDriverPhase('readySwipe'), 5000);
     const timeoutT = setTimeout(() => setFindingDriverPhase('no_driver_found'), 11000);
-    return () => {
-      clearTimeout(readyT);
-      clearTimeout(timeoutT);
-    };
+    return () => clearTimeout(timeoutT);
   }, [findingDriverVisible, findingDriverPhase]);
 
   useEffect(() => {
@@ -1229,7 +1331,7 @@ export default function MainScreen() {
   );
   const rideEtaLabel =
     routeDurationSec > 0 ? `${Math.max(1, Math.round(routeDurationSec / 60))} min` : '—';
-  const rideFareLabel = `$${estimatedFareUsd.toFixed(2)}`;
+  const rideFareLabel = backendFareLabel ?? `$${estimatedFareUsd.toFixed(2)}`;
   const savedPlacesSummary =
     savedPlaces.length > 0
       ? savedPlaces
@@ -1362,6 +1464,10 @@ export default function MainScreen() {
   };
 
   const saveNewCard = async () => {
+    if (!user) {
+      Alert.alert('Sign in required', 'Sign in to save a payment method.');
+      return;
+    }
     const digits = newCardNumber.replace(/\D/g, '');
     if (digits.length < 13 || digits.length > 19) {
       Alert.alert('Invalid card number', 'Enter the full number on your card.');
@@ -1377,17 +1483,30 @@ export default function MainScreen() {
       Alert.alert('Invalid CVV', 'Enter the 3 or 4 digit security code.');
       return;
     }
-    const last4 = digits.slice(-4);
+    const [mm, yy] = exp.split('/');
+    const expiryMonth = mm.padStart(2, '0');
+    const expiryYear = `20${yy}`;
     const first = digits[0];
-    const type: 'visa' | 'mastercard' = first === '5' ? 'mastercard' : 'visa';
-    const label = newCardName.trim() || `Card •••• ${last4}`;
-    const id = `c_${Date.now()}`;
-    const next: ProfileCard[] = [...cards, { id, type, last4, label }];
-    setCards(next);
-    setDefaultCard(id);
-    await AsyncStorage.setItem('profile_cards', JSON.stringify(next));
-    await AsyncStorage.setItem('profile_default_card', id);
-    closeAddCardSheet();
+    const brand = first === '5' ? 'Mastercard' : 'Visa';
+    const token =
+      (typeof process.env.EXPO_PUBLIC_PAYMENT_DEV_TOKEN === 'string' &&
+        process.env.EXPO_PUBLIC_PAYMENT_DEV_TOKEN.trim()) ||
+      'dev_powertranz_spi_placeholder';
+    try {
+      await createPaymentMethod({
+        provider: 'powertranz',
+        token,
+        last4: digits.slice(-4),
+        brand,
+        expiryMonth,
+        expiryYear,
+        isDefault: cards.length === 0,
+      });
+      await refreshPaymentMethods();
+      closeAddCardSheet();
+    } catch (e) {
+      Alert.alert('Could not save card', e instanceof Error ? e.message : 'Try again.');
+    }
   };
 
   const toNormalized = toQuery.trim().toLowerCase();
@@ -1399,6 +1518,64 @@ export default function MainScreen() {
     roadRouteCoords.length > 0 ? roadRouteCoords[roadRouteCoords.length - 1] : null;
   const hasRouteInputs = !!toQuery.trim() && !!destinationQuery.trim();
   const hasRoute = hasRouteInputs && roadRouteCoords.length > 1;
+
+  useEffect(() => {
+    if (!user || !hasRoute || !pickupCoordinate || !dropoffCoordinate || routeDistanceM < 1 || routeDurationSec < 1) {
+      setBackendFareLabel(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          const distanceKm = Math.max(0.01, routeDistanceM / 1000);
+          const durationMinutes = Math.max(1, Math.round(routeDurationSec / 60));
+          const estimateRequestBody = buildKingstonZoneFareEstimateBody({
+            pickup: {
+              address: toQuery.trim(),
+              lat: pickupCoordinate.latitude,
+              lng: pickupCoordinate.longitude,
+            },
+            dropoff: {
+              address: destinationQuery.trim(),
+              lat: dropoffCoordinate.latitude,
+              lng: dropoffCoordinate.longitude,
+            },
+            distanceKm,
+            durationMinutes,
+            insurance: false,
+          });
+          const res = await postFareEstimate(estimateRequestBody);
+          if (cancelled) return;
+          const fare = res.estimatedFare ?? res.total ?? res.pricing?.estimatedFare ?? 0;
+          const cur = res.currency ?? res.pricing?.currency ?? 'JMD';
+          if (cur === 'JMD') {
+            setBackendFareLabel(
+              `J$${Number(fare).toLocaleString('en-JM', { maximumFractionDigits: 0 })}`
+            );
+          } else {
+            setBackendFareLabel(`$${Number(fare).toFixed(2)}`);
+          }
+        } catch {
+          if (!cancelled) setBackendFareLabel(null);
+        }
+      })();
+    }, 600);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [
+    user,
+    hasRoute,
+    pickupCoordinate,
+    dropoffCoordinate,
+    routeDistanceM,
+    routeDurationSec,
+    toQuery,
+    destinationQuery,
+  ]);
+
   const latestBookedRide =
     bookedRides.find(
       (r) =>
@@ -1409,8 +1586,6 @@ export default function MainScreen() {
   const presentRide =
     (activeTrip && activeTrip.expiresAtMs > nowMs ? activeTrip : null) ??
     latestBookedRide;
-  const [bookingFor, setBookingFor] = useState<'self' | 'friend'>('self');
-  const [selectedPaymentLabel, setSelectedPaymentLabel] = useState<'Card' | 'Cash'>('Card');
   const startFindingDriver = (forWhom: 'self' | 'friend') => {
     if (!hasRoute || routeIssue) {
       Alert.alert('Route required', 'Enter pickup and destination and wait for the route to load.');
@@ -1420,6 +1595,7 @@ export default function MainScreen() {
       Alert.alert('Route required', 'Could not determine pickup and drop-off points.');
       return;
     }
+    noDriversNearbyDialogShownRef.current = false;
     setBookingFor(forWhom);
     setFindingDriverPhase('searching');
     setFindingDriverVisible(true);
@@ -1439,53 +1615,152 @@ export default function MainScreen() {
     }
     startFindingDriver('self');
   };
-  const confirmRideRequest = () => {
+  const confirmRideRequest = async () => {
     if (!pickupCoordinate || !dropoffCoordinate || roadRouteCoords.length < 2) return;
-    const driverCoord = interpolateRoutePoint(roadRouteCoords, 0.22) ?? pickupCoordinate;
-    const pin = String(Math.floor(1000 + Math.random() * 9000));
-    const bookedAtMs = Date.now();
-    const nextTrip: ActiveTripState = {
-      id: `trip_${bookedAtMs}`,
-      bookedAtMs,
-      expiresAtMs: bookedAtMs + ACTIVE_TRIP_TTL_MS,
-      bookedFor: bookingFor,
-      status: 'driver_arriving',
-      pickup: pickupCoordinate,
-      dropoff: dropoffCoordinate,
-      routeCoords: roadRouteCoords,
-      fromLabel: toQuery.trim(),
-      toLabel: destinationQuery.trim(),
-      fareUsd: estimatedFareUsd,
-      etaMinutes: Math.max(1, Math.round(routeDurationSec / 60) || 1),
-      driverPin: pin,
-      plate: `P ${Math.floor(1000 + Math.random() * 9000)}`,
-      carDetails: 'Toyota Corolla · Silver',
-      driverName: 'Marcus W.',
-      driverCoordinate: driverCoord,
-      paymentLabel: selectedPaymentLabel,
-    };
-    setActiveTrip(nextTrip);
-    setBookedRides((prev) => {
-      const next = [nextTrip, ...prev.filter((r) => r.id !== nextTrip.id)].slice(0, 30);
-      void AsyncStorage.setItem(BOOKED_RIDES_STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-    void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(nextTrip));
+    if (!user) {
+      Alert.alert('Sign in required', 'Please sign in to request a ride.');
+      return;
+    }
+
+    setRideRequestSubmitting(true);
+    try {
+      const bookedAtMs = Date.now();
+      const sessionId = `sess_${bookedAtMs.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const distanceKm = Math.max(0.1, routeDistanceM / 1000);
+      const durationMinutes = Math.max(1, Math.round(routeDurationSec / 60) || 1);
+      const driverCoord = interpolateRoutePoint(roadRouteCoords, 0.22) ?? pickupCoordinate;
+
+      const createRideInput = {
+        sessionId,
+        serviceArea: 'JM',
+        bookedFor: bookingFor,
+        pickup: {
+          address: toQuery.trim(),
+          lat: pickupCoordinate.latitude,
+          lng: pickupCoordinate.longitude,
+        },
+        dropoff: {
+          address: destinationQuery.trim(),
+          lat: dropoffCoordinate.latitude,
+          lng: dropoffCoordinate.longitude,
+        },
+        route: routeEncodedPolyline
+          ? {
+              encodedPolyline: routeEncodedPolyline,
+              distanceMeters: routeDistanceM,
+              durationSeconds: routeDurationSec,
+            }
+          : undefined,
+        distanceKm,
+        durationMinutes,
+        immediate: true,
+        payment: {
+          method: (selectedPaymentLabel === 'Cash' ? 'cash' : 'card') as 'card' | 'cash',
+          label: selectedPaymentLabel,
+          ...(selectedPaymentLabel === 'Card' && defaultCard
+            ? { paymentMethodId: defaultCard }
+            : {}),
+        },
+        metadata: {
+          platform: Platform.OS,
+          appVersion: Constants.expoConfig?.version ?? '1.0.0',
+        },
+      };
+      const { rideRequest } = await createImmediateRide(createRideInput);
+
+      const nextTrip = buildActiveTripFromCreateResponse(rideRequest, {
+        bookedFor: bookingFor,
+        routeCoords: roadRouteCoords,
+        driverCoordinate: driverCoord,
+        etaMinutes: durationMinutes,
+        bookedAtMs,
+        ttlMs: ACTIVE_TRIP_TTL_MS,
+        paymentLabel: selectedPaymentLabel,
+      });
+
+      setActiveTrip(nextTrip);
+      setBookedRides((prev) => {
+        const next = [nextTrip, ...prev.filter((r) => r.id !== nextTrip.id)].slice(0, 30);
+        void AsyncStorage.setItem(BOOKED_RIDES_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
+      void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(nextTrip));
+      setFindingDriverVisible(false);
+      setFindingDriverPhase('searching');
+      setBookingFor('self');
+      {
+        const canCard =
+          cards.length > 0 &&
+          defaultCard != null &&
+          cards.some((c) => c.id === defaultCard);
+        setSelectedPaymentLabel(canCard ? 'Card' : 'Cash');
+      }
+      setScreen('activeRide');
+    } catch (e) {
+      Alert.alert('Could not request ride', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setRideRequestSubmitting(false);
+    }
+  };
+  const closeFindingDriver = useCallback(() => {
     setFindingDriverVisible(false);
     setFindingDriverPhase('searching');
     setBookingFor('self');
-    setSelectedPaymentLabel('Card');
-    setScreen('activeRide');
-  };
-  const closeFindingDriver = () => {
-    setFindingDriverVisible(false);
-    setFindingDriverPhase('searching');
-    setBookingFor('self');
-    setSelectedPaymentLabel('Card');
-  };
+    const canCard =
+      cards.length > 0 &&
+      defaultCard != null &&
+      cards.some((c) => c.id === defaultCard);
+    setSelectedPaymentLabel(canCard ? 'Card' : 'Cash');
+  }, [cards, defaultCard]);
   const retryFindingDriver = () => {
+    noDriversNearbyDialogShownRef.current = false;
     setFindingDriverPhase('searching');
   };
+
+  useEffect(() => {
+    if (!findingDriverVisible || findingDriverPhase !== 'searching' || !pickupCoordinate) return;
+
+    let cancelled = false;
+    const runNearbyCheck = async () => {
+      if (cancelled) return;
+      try {
+        const raw = await getNearbyDrivers({
+          lat: pickupCoordinate.latitude,
+          lng: pickupCoordinate.longitude,
+          radiusKm: 5,
+        });
+        if (cancelled) return;
+        const n = countDriversInNearbyResponse(raw);
+        if (n === null) return;
+        if (n > 0) {
+          setFindingDriverPhase('readySwipe');
+          return;
+        }
+        if (n === 0 && !noDriversNearbyDialogShownRef.current) {
+          noDriversNearbyDialogShownRef.current = true;
+          Alert.alert(
+            'No drivers nearby',
+            'No drivers found in your area. Keep searching?',
+            [
+              { text: 'No', style: 'cancel', onPress: () => closeFindingDriver() },
+              { text: 'Yes', style: 'default', onPress: () => {} },
+            ]
+          );
+        }
+      } catch {
+        /* signed out, network, or API error — do not block matching */
+      }
+    };
+
+    const initial = setTimeout(runNearbyCheck, 1000);
+    const interval = setInterval(runNearbyCheck, 6000);
+    return () => {
+      cancelled = true;
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
+  }, [findingDriverVisible, findingDriverPhase, pickupCoordinate, closeFindingDriver]);
+
   const persistTripRecord = (trip: ActiveTripState) => {
     setBookedRides((prev) => {
       const next = [trip, ...prev.filter((r) => r.id !== trip.id)].slice(0, 40);
@@ -1576,6 +1851,38 @@ export default function MainScreen() {
     }, autoCompleteMs);
     return () => clearTimeout(tComplete);
   }, [activeTrip?.id, activeTrip?.status, activeTrip?.etaMinutes]);
+
+  useEffect(() => {
+    const id = activeTrip?.serverRideRequestId;
+    if (
+      !id ||
+      activeTrip?.status === 'completed' ||
+      activeTrip?.status === 'cancelled'
+    ) {
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const { rideRequest } = await getRideRequestById(id);
+        setActiveTrip((prev) => {
+          if (!prev || prev.serverRideRequestId !== id) return prev;
+          const merged = mergePollRideRequest(prev, rideRequest);
+          void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(merged));
+          return merged;
+        });
+      } catch {
+        /* transient network errors */
+      }
+    };
+
+    const interval = setInterval(() => {
+      void poll();
+    }, 10000);
+    void poll();
+    return () => clearInterval(interval);
+  }, [activeTrip?.serverRideRequestId, activeTrip?.status]);
+
   const showOriginTextPin = !hasRoute && !isCurrentLocationQuery && !!originPreviewCoordinate;
   const showDestPreviewPin = !hasRoute && !!destinationPreviewCoordinate;
 
@@ -2160,7 +2467,7 @@ export default function MainScreen() {
         userPhoneE164={userPhoneE164}
         cards={cards}
         defaultCard={defaultCard}
-        setDefaultCard={setDefaultCard}
+        selectDefaultCard={selectDefaultCard}
         addCardVisible={addCardVisible}
         setAddCardVisible={setAddCardVisible}
         newCardNumber={newCardNumber}
@@ -2338,6 +2645,13 @@ export default function MainScreen() {
         onClose={closeFindingDriver}
         onSwipeConfirm={confirmRideRequest}
         onRetry={retryFindingDriver}
+        confirming={rideRequestSubmitting}
+        onDevSkipWait={__DEV__ ? () => setFindingDriverPhase('readySwipe') : undefined}
+        canPayWithCard={
+          cards.length > 0 &&
+          defaultCard != null &&
+          cards.some((c) => c.id === defaultCard)
+        }
       />
 
       {/* Map: short when sheet is up, full window when sheet is minimized */}
@@ -3082,6 +3396,7 @@ export default function MainScreen() {
           themeOverride={themeOverride}
           refreshing={refreshingMain}
           onRefresh={onRefreshMain}
+          onClearCache={handleClearCache}
         />
       ) : null}
 

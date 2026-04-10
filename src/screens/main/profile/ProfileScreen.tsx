@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
@@ -31,7 +30,8 @@ type Props = {
   userPhoneE164: string | null;
   cards: ProfileCard[];
   defaultCard: string | null;
-  setDefaultCard: (id: string) => void;
+  /** Sets default payment method on the server (PowerTranz vault id). */
+  selectDefaultCard: (id: string) => void;
   addCardVisible: boolean;
   setAddCardVisible: (v: boolean) => void;
   newCardNumber: string;
@@ -58,7 +58,7 @@ export function ProfileScreen({
   userPhoneE164,
   cards,
   defaultCard,
-  setDefaultCard,
+  selectDefaultCard,
   addCardVisible,
   setAddCardVisible,
   newCardNumber,
@@ -144,14 +144,16 @@ export function ProfileScreen({
           </Pressable>
         </View>
         <View style={[styles.profileViewCard, { backgroundColor: ui.cardBg }]}>
+          {cards.length === 0 ? (
+            <Text style={[styles.profileViewValue, { color: ui.textMuted, paddingVertical: 14, paddingHorizontal: 4 }]}>
+              No saved cards. Tap + to add a card. Card payments use your default card on file.
+            </Text>
+          ) : null}
           {cards.map((card, i) => (
             <View key={card.id}>
               <Pressable
                 style={styles.profilePaymentRow}
-                onPress={() => {
-                  setDefaultCard(card.id);
-                  void AsyncStorage.setItem('profile_default_card', card.id);
-                }}
+                onPress={() => selectDefaultCard(card.id)}
               >
                 <View style={[styles.profilePaymentCardIcon, card.type === 'visa' ? styles.profilePaymentVisa : styles.profilePaymentMc]}>
                   <Text style={styles.profilePaymentCardIconText}>{card.type === 'visa' ? 'VISA' : 'MC'}</Text>

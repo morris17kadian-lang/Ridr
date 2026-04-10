@@ -27,6 +27,11 @@ export type ActiveTripState = {
   routeCoords: LatLng[];
   fromLabel: string;
   toLabel: string;
+  /** Display string from backend (e.g. J$1,520) or local mock */
+  fareLabel?: string;
+  fareCurrency?: string;
+  /** Server `ride_requests` id when created via API */
+  serverRideRequestId?: string;
   fareUsd: number;
   etaMinutes: number;
   driverPin: string;

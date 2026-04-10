@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
+  PanResponder,
   Platform,
   Pressable,
   StatusBar,
@@ -12,6 +14,11 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import type { MainScreenUi } from '../mainScreenUi';
 import type { ActiveTripState } from './activeTripTypes';
 import { RideDetailsBottomSheet } from './RideDetailsBottomSheet';
+
+/** Visible strip when the sheet is collapsed — enough to drag back up */
+const SHEET_PEEK_PX = 56;
+const MAP_PAD_EXPANDED = 280;
+const MAP_PAD_COLLAPSED = 88;
 
 type Props = {
   trip: ActiveTripState;
@@ -42,8 +49,12 @@ function nearestRouteIndex(
 
 export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
   const mapRef = useRef<MapView | null>(null);
+  const sheetTranslateY = useRef(new Animated.Value(0)).current;
+  const maxTranslateRef = useRef(0);
+  const dragStartY = useRef(0);
   const totalEtaSec = Math.max(60, trip.etaMinutes * 60);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [mapBottomPad, setMapBottomPad] = useState(MAP_PAD_EXPANDED);
 
   const tripPath = useMemo(() => {
     if (trip.routeCoords.length < 2) return [trip.pickup, trip.dropoff];
@@ -82,6 +93,65 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
   const maxStep = Math.max(0, tripPath.length - 1);
   const driverStep = Math.min(maxStep, Math.floor(progress * maxStep));
   const liveDriverCoordinate = tripPath[Math.min(driverStep, tripPath.length - 1)] ?? trip.pickup;
+
+  const fitMapToRoute = useCallback(
+    (bottomPad: number) => {
+      mapRef.current?.fitToCoordinates(
+        [trip.pickup, trip.dropoff, liveDriverCoordinate],
+        { edgePadding: { top: 100, right: 48, bottom: bottomPad, left: 48 }, animated: true }
+      );
+    },
+    [trip.pickup, trip.dropoff, liveDriverCoordinate]
+  );
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => maxTranslateRef.current > 8,
+        onMoveShouldSetPanResponder: (_, g) =>
+          maxTranslateRef.current > 8 && Math.abs(g.dy) > Math.abs(g.dx) && Math.abs(g.dy) > 6,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: () => {
+          sheetTranslateY.stopAnimation((v) => {
+            dragStartY.current = v;
+          });
+        },
+        onPanResponderMove: (_, g) => {
+          const maxT = maxTranslateRef.current;
+          const next = Math.max(0, Math.min(maxT, dragStartY.current + g.dy));
+          sheetTranslateY.setValue(next);
+        },
+        onPanResponderRelease: (_, g) => {
+          sheetTranslateY.stopAnimation((val) => {
+            const maxT = maxTranslateRef.current;
+            if (maxT <= 0) return;
+            const threshold = maxT * 0.28;
+            let snapTo = val > threshold ? maxT : 0;
+            if (g.vy > 1.1) snapTo = maxT;
+            if (g.vy < -1.1) snapTo = 0;
+            const bottomPad = snapTo > maxT * 0.5 ? MAP_PAD_COLLAPSED : MAP_PAD_EXPANDED;
+            Animated.spring(sheetTranslateY, {
+              toValue: snapTo,
+              useNativeDriver: false,
+              friction: 9,
+              tension: 68,
+            }).start(({ finished }) => {
+              if (finished) {
+                setMapBottomPad(bottomPad);
+                fitMapToRoute(bottomPad);
+              }
+            });
+          });
+        },
+      }),
+    [fitMapToRoute, sheetTranslateY]
+  );
+
+  useEffect(() => {
+    sheetTranslateY.setValue(0);
+    maxTranslateRef.current = 0;
+    setMapBottomPad(MAP_PAD_EXPANDED);
+  }, [trip.id, sheetTranslateY]);
 
   useEffect(() => {
     setElapsedSec(0);
@@ -146,7 +216,7 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
         onMapReady={() => {
           mapRef.current?.fitToCoordinates(
             [trip.pickup, trip.dropoff, liveDriverCoordinate],
-            { edgePadding: { top: 100, right: 48, bottom: 280, left: 48 }, animated: false }
+            { edgePadding: { top: 100, right: 48, bottom: mapBottomPad, left: 48 }, animated: false }
           );
         }}
         showsUserLocation={false}
@@ -197,11 +267,25 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
         </View>
       </View>
 
-      <RideDetailsBottomSheet
-        trip={trip}
-        ui={ui}
-        liveEtaMin={liveEtaMin}
-      />
+      <Animated.View
+        style={[
+          styles.rideSheet,
+          {
+            transform: [{ translateY: sheetTranslateY }],
+          },
+        ]}
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          maxTranslateRef.current = Math.max(0, h - SHEET_PEEK_PX);
+        }}
+      >
+        <RideDetailsBottomSheet
+          trip={trip}
+          ui={ui}
+          liveEtaMin={liveEtaMin}
+          headerPanHandlers={panResponder.panHandlers}
+        />
+      </Animated.View>
     </View>
   );
 }
@@ -252,6 +336,13 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
+  },
+  rideSheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 10,
   },
   dot: {
     width: 16,
