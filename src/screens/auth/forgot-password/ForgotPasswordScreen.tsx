@@ -12,10 +12,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../../context/AuthContext';
-import type { ForgotPasswordProps } from '../../navigation/types';
-import { useAppTheme } from '../../theme/ThemeProvider';
-import { useAuthStyles } from './authStyles';
+import { useAuth } from '../../../context/AuthContext';
+import type { ForgotPasswordProps } from '../../../navigation/types';
+import { useAppTheme } from '../../../theme/ThemeProvider';
+import { useAuthStyles } from '../authStyles';
 
 export default function ForgotPasswordScreen({ navigation }: ForgotPasswordProps) {
   const { markPasswordResetSent } = useAuth();
@@ -60,40 +60,46 @@ export default function ForgotPasswordScreen({ navigation }: ForgotPasswordProps
           contentContainerStyle={authStyles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={authStyles.subtitle}>
-            Enter your email and we&apos;ll send you a link to reset your password.
-          </Text>
-
-          <Text style={authStyles.label}>Email</Text>
-          <TextInput
-            style={authStyles.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            placeholderTextColor={colors.textPlaceholder}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          <Pressable
-            style={authStyles.primaryBtn}
-            onPress={() => void onSubmit()}
-            disabled={submitting}
-          >
-            {submitting ? (
-              <ActivityIndicator color={colors.textOnPrimary} />
-            ) : (
-              <Text style={authStyles.primaryBtnText}>Send reset link</Text>
-            )}
-          </Pressable>
-
-          <View style={authStyles.linkRow}>
-            <Pressable onPress={() => navigation.navigate('SignIn')}>
-              <Text style={authStyles.linkText}>
-                <Text style={authStyles.linkAccent}>Back to sign in</Text>
+          <View style={authStyles.formCard}>
+            <View style={authStyles.formCardSection}>
+              <Text style={authStyles.subtitle}>
+                Enter your email and we&apos;ll send you a link to reset your password.
               </Text>
-            </Pressable>
+
+              <Text style={authStyles.label}>Email</Text>
+            </View>
+            <TextInput
+              style={[authStyles.input, authStyles.inputCardBleed, authStyles.inputCardBleedLast]}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              placeholderTextColor={colors.textPlaceholder}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <View style={authStyles.formCardSection}>
+              <Pressable
+                style={authStyles.primaryBtn}
+                onPress={() => void onSubmit()}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator color={colors.textOnPrimary} />
+                ) : (
+                  <Text style={authStyles.primaryBtnText}>Send reset link</Text>
+                )}
+              </Pressable>
+
+              <View style={authStyles.linkRow}>
+                <Pressable onPress={() => navigation.navigate('SignIn')}>
+                  <Text style={authStyles.linkText}>
+                    <Text style={authStyles.linkAccent}>Back to sign in</Text>
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
