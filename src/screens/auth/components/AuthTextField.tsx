@@ -22,6 +22,8 @@ export type AuthTextFieldProps = {
   onBlur?: TextInputProps['onBlur'];
   /** Merged with `fieldBlock` (e.g. `{ marginBottom: 0 }` in a row). */
   blockStyle?: ViewStyle;
+  /** Narrow columns (e.g. name row): label aligns inside the column, not with full-bleed fields. */
+  compactLabel?: boolean;
 };
 
 export function AuthTextField({
@@ -40,6 +42,7 @@ export function AuthTextField({
   autoComplete,
   textContentType,
   blockStyle,
+  compactLabel,
 }: AuthTextFieldProps) {
   const [focused, setFocused] = useState(false);
   const { colors } = useAppTheme();
@@ -47,7 +50,7 @@ export function AuthTextField({
 
   return (
     <View style={[authStyles.fieldBlock, blockStyle]}>
-      <Text style={authStyles.fieldLabel}>{label}</Text>
+      <Text style={[authStyles.fieldLabel, compactLabel && authStyles.fieldLabelCompact]}>{label}</Text>
       <View style={[authStyles.fieldShell, focused && authStyles.fieldShellFocused]}>
         <Ionicons name={icon} size={20} color={colors.text} style={authStyles.fieldIconLeft} />
         <TextInput

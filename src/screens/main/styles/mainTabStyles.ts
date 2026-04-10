@@ -1,0 +1,190 @@
+import { StyleSheet } from 'react-native';
+
+/** Styles for bottom-nav full-screen tab panels (Activity, Favourites, Settings). */
+export const mainTabStyles = StyleSheet.create({
+  tabScreen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 4,
+  },
+  tabScreenHeader: {
+    paddingTop: 68,
+    paddingBottom: 15,
+    paddingHorizontal: 22,
+    borderBottomWidth: 1,
+    gap: 10,
+  },
+  tabScreenHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  tabSearchIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+    borderWidth: 1,
+  },
+  tabSearchInput: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    padding: 0,
+  },
+  tabScreenTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  tabScreenContent: {
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    paddingBottom: 120,
+    gap: 6,
+  },
+  tabSectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+    marginTop: 12,
+    marginLeft: 4,
+  },
+  activityFilterRow: {
+    marginBottom: 4,
+  },
+  activityFilterContent: {
+    gap: 8,
+    paddingBottom: 2,
+  },
+  activityFilterPill: {
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#FFD000',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  activityFilterPillActive: {
+    backgroundColor: '#FFD000',
+    borderWidth: 0,
+  },
+  activityFilterPillText: {
+    color: '#000000',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  activityFilterPillTextActive: {
+    color: '#000000',
+    fontWeight: '800',
+  },
+  activityGroupHeader: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: 16,
+    marginBottom: 4,
+    marginLeft: 4,
+  },
+  activityCardContent: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 5,
+  },
+  activityCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  activityCardTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  activityCardSub: {
+    fontSize: 13,
+    fontWeight: '400',
+  },
+  activityEmpty: {
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '500',
+    marginTop: 60,
+  },
+  tabCard: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  tabDivider: {
+    height: 1,
+    marginHorizontal: 16,
+  },
+  favItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  favIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  favBody: {
+    flex: 1,
+    gap: 2,
+  },
+  favTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  favSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    gap: 14,
+  },
+  settingsRowLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  settingsRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  settingsRowValue: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+});

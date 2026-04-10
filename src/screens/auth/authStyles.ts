@@ -10,11 +10,26 @@ export function createAuthStyles(colors: ThemeColors) {
     backgroundColor: colors.surface,
   },
   scrollContent: {
-    paddingHorizontal: 22,
+    paddingHorizontal: 0,
     paddingTop: 8,
     paddingBottom: 48,
     flexGrow: 1,
     justifyContent: 'center',
+  },
+  /** Rounded panel: no horizontal padding so inputs can span full card width. */
+  formCard: {
+    marginHorizontal: 22,
+    paddingVertical: 24,
+    paddingHorizontal: 0,
+    backgroundColor: colors.card,
+    borderRadius: 24,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  /** Inset for toggle, buttons, and secondary rows — not for full-bleed field shells. */
+  formCardSection: {
+    paddingHorizontal: 22,
   },
   welcomeTitle: {
     fontSize: 32,
@@ -27,6 +42,7 @@ export function createAuthStyles(colors: ThemeColors) {
     alignItems: 'center',
     paddingTop: 32,
     paddingBottom: 28,
+    paddingHorizontal: 22,
   },
   logoImage: {
     width: 80,
@@ -75,6 +91,7 @@ export function createAuthStyles(colors: ThemeColors) {
   },
   fieldBlock: {
     marginBottom: 20,
+    alignSelf: 'stretch',
   },
   /** Use inside `nameRow` so paired fields don’t stack double margin. */
   fieldBlockInRow: {
@@ -84,20 +101,22 @@ export function createAuthStyles(colors: ThemeColors) {
     flexDirection: 'row',
     marginBottom: 20,
     alignItems: 'flex-start',
+    paddingHorizontal: 22,
+    gap: 10,
   },
   nameRowHalf: {
     flex: 1,
     minWidth: 0,
-    marginRight: 10,
-  },
-  nameRowHalfLast: {
-    marginRight: 0,
   },
   fieldLabel: {
     fontSize: 13,
     fontWeight: '600',
     color: colors.textMuted,
     marginBottom: 8,
+    paddingHorizontal: 22,
+  },
+  fieldLabelCompact: {
+    paddingHorizontal: 0,
     marginLeft: 4,
   },
   fieldShell: {
@@ -110,6 +129,8 @@ export function createAuthStyles(colors: ThemeColors) {
     paddingHorizontal: 18,
     paddingVertical: 4,
     minHeight: 54,
+    alignSelf: 'stretch',
+    width: '100%',
   },
   fieldIconLeft: {
     marginRight: 12,
@@ -265,6 +286,7 @@ export function createAuthStyles(colors: ThemeColors) {
     fontWeight: '700',
     color: colors.text,
     marginBottom: 8,
+    paddingHorizontal: 22,
   },
   input: {
     backgroundColor: colors.inputBg,
@@ -275,6 +297,19 @@ export function createAuthStyles(colors: ThemeColors) {
     fontWeight: '500',
     color: colors.text,
     marginBottom: 16,
+  },
+  /** Full width inside `formCard` (no card horizontal padding). */
+  inputCardBleed: {
+    alignSelf: 'stretch',
+    width: '100%',
+    borderRadius: 0,
+    marginBottom: 0,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  inputCardBleedLast: {
+    borderBottomWidth: 0,
+    marginBottom: 8,
   },
   linkRow: {
     marginTop: 20,

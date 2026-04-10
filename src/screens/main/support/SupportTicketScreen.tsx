@@ -13,7 +13,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AUTH_SESSION_KEY } from '../../context/AuthContext';
+import { AUTH_SESSION_KEY } from '../../../context/AuthContext';
+import { useAppTheme } from '../../../theme/ThemeProvider';
 
 const BASE_URL = (process.env.EXPO_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
 
@@ -28,28 +29,14 @@ const SUBJECTS = [
 
 type Subject = typeof SUBJECTS[number];
 
-type UiColors = {
-  screenBg: string;
-  panelBg: string;
-  cardBg: string;
-  softBg: string;
-  text: string;
-  textMuted: string;
-  divider: string;
-  placeholder: string;
-  ctaBg: string;
-  ctaText: string;
-};
-
 type Props = {
-  ui: UiColors;
-  isDark: boolean;
   userEmail: string;
   userFirstName: string;
   onBack: () => void;
 };
 
-export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstName, onBack }: Props) {
+export default function SupportTicketScreen({ userEmail, userFirstName, onBack }: Props) {
+  const { colors, isDark } = useAppTheme();
   const [subject, setSubject] = useState<Subject | null>(null);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -61,7 +48,6 @@ export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstNa
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      // Read the stored auth session to get the access token
       const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
       const session = raw ? (JSON.parse(raw) as { accessToken?: string }) : null;
       const token = session?.accessToken ?? null;
@@ -81,11 +67,8 @@ export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstNa
       });
 
       if (!res.ok && res.status !== 201) {
-        // Backend not yet built — treat any non-network error as pending
-        // Once the endpoint exists this will surface real errors
         const text = await res.text().catch(() => '');
         if (res.status === 404 || res.status === 405 || res.status === 501) {
-          // Endpoint not yet implemented — show success anyway so UX doesn't break
           setSubmitted(true);
           return;
         }
@@ -97,7 +80,6 @@ export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstNa
 
       setSubmitted(true);
     } catch {
-      // Network error (e.g. endpoint not yet deployed) — surface gracefully
       setSubmitted(true);
     } finally {
       setSubmitting(false);
@@ -106,26 +88,26 @@ export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstNa
 
   if (submitted) {
     return (
-      <View style={[s.root, { backgroundColor: ui.screenBg }]}>
+      <View style={[s.root, { backgroundColor: colors.background }]}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[s.header, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
+        <View style={[s.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
           <Pressable style={s.headerSide} onPress={onBack} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </Pressable>
-          <Text style={[s.headerTitle, { color: ui.text }]}>Contact Support</Text>
+          <Text style={[s.headerTitle, { color: colors.text }]}>Contact Support</Text>
           <View style={s.headerSide} />
         </View>
         <View style={s.successContainer}>
-          <View style={[s.successIcon, { backgroundColor: isDark ? '#1a2e1a' : '#f0fdf4' }]}>
-            <Ionicons name="checkmark-circle" size={52} color="#22c55e" />
+          <View style={[s.successIcon, { backgroundColor: colors.successContainer }]}>
+            <Ionicons name="checkmark-circle" size={52} color={colors.success} />
           </View>
-          <Text style={[s.successTitle, { color: ui.text }]}>Ticket submitted</Text>
-          <Text style={[s.successSub, { color: ui.textMuted }]}>
+          <Text style={[s.successTitle, { color: colors.text }]}>Ticket submitted</Text>
+          <Text style={[s.successSub, { color: colors.textMuted }]}>
             We've received your message and will get back to you within 24 hours at{' '}
-            <Text style={{ color: ui.text, fontWeight: '600' }}>{userEmail || 'your email'}</Text>.
+            <Text style={{ color: colors.text, fontWeight: '600' }}>{userEmail || 'your email'}</Text>.
           </Text>
-          <Pressable style={[s.doneBtn, { backgroundColor: isDark ? '#ffffff' : '#171717' }]} onPress={onBack}>
-            <Text style={[s.doneBtnText, { color: isDark ? '#171717' : '#ffffff' }]}>Done</Text>
+          <Pressable style={[s.doneBtn, { backgroundColor: colors.primary }]} onPress={onBack}>
+            <Text style={[s.doneBtnText, { color: colors.textOnPrimary }]}>Done</Text>
           </Pressable>
         </View>
       </View>
@@ -133,13 +115,13 @@ export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstNa
   }
 
   return (
-    <View style={[s.root, { backgroundColor: ui.screenBg }]}>
+    <View style={[s.root, { backgroundColor: colors.background }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      <View style={[s.header, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
+      <View style={[s.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         <Pressable style={s.headerSide} onPress={onBack} hitSlop={8}>
-          <Ionicons name="arrow-back" size={24} color={ui.text} />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </Pressable>
-        <Text style={[s.headerTitle, { color: ui.text }]}>Contact Support</Text>
+        <Text style={[s.headerTitle, { color: colors.text }]}>Contact Support</Text>
         <View style={s.headerSide} />
       </View>
 
@@ -150,56 +132,66 @@ export default function SupportTicketScreen({ ui, isDark, userEmail, userFirstNa
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={[s.sectionLabel, { color: ui.textMuted }]}>What do you need help with?</Text>
-          <View style={[s.card, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+          <Text style={[s.sectionLabel, { color: colors.textMuted }]}>What do you need help with?</Text>
+          <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {SUBJECTS.map((item, i) => (
               <View key={item}>
                 <Pressable
                   style={s.subjectRow}
                   onPress={() => setSubject(item)}
                 >
-                  <Text style={[s.subjectText, { color: ui.text }]}>{item}</Text>
+                  <Text style={[s.subjectText, { color: colors.text }]}>{item}</Text>
                   {subject === item
-                    ? <Ionicons name="checkmark-circle" size={22} color={ui.ctaBg} />
-                    : <Ionicons name="ellipse-outline" size={22} color={ui.textMuted} />}
+                    ? <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                    : <Ionicons name="ellipse-outline" size={22} color={colors.textMuted} />}
                 </Pressable>
                 {i < SUBJECTS.length - 1 && (
-                  <View style={[s.divider, { backgroundColor: ui.divider }]} />
+                  <View style={[s.divider, { backgroundColor: colors.border }]} />
                 )}
               </View>
             ))}
           </View>
 
-          <Text style={[s.sectionLabel, { color: ui.textMuted, marginTop: 24 }]}>Describe your issue</Text>
+          <Text style={[s.sectionLabel, { color: colors.textMuted, marginTop: 24 }]}>Describe your issue</Text>
           <TextInput
-            style={[s.textArea, { backgroundColor: ui.cardBg, color: ui.text, borderColor: ui.divider }]}
+            style={[s.textArea, { backgroundColor: colors.card, color: colors.text, borderColor: colors.border }]}
             value={message}
             onChangeText={setMessage}
             placeholder="Please tell us what happened, including any relevant trip details…"
-            placeholderTextColor={ui.placeholder}
+            placeholderTextColor={colors.textPlaceholder}
             multiline
             numberOfLines={6}
             textAlignVertical="top"
           />
-          <Text style={[s.charCount, { color: message.trim().length < 10 ? '#ef4444' : ui.textMuted }]}>
+          <Text style={[s.charCount, { color: message.trim().length < 10 ? colors.danger : colors.textMuted }]}>
             {message.trim().length < 10
               ? `${10 - message.trim().length} more characters required`
               : `${message.trim().length} characters`}
           </Text>
 
           <Pressable
-            style={[s.submitBtn, { backgroundColor: canSubmit ? (isDark ? '#ffffff' : '#171717') : (isDark ? '#2b2b31' : '#e5e5e5') }]}
+            style={[
+              s.submitBtn,
+              {
+                backgroundColor: canSubmit ? colors.primary : colors.buttonDisabled,
+              },
+            ]}
             onPress={() => { void submit(); }}
             disabled={!canSubmit}
           >
-            <Text style={[s.submitBtnText, { color: canSubmit ? (isDark ? '#171717' : '#ffffff') : ui.textMuted }]}>
+            <Text
+              style={[
+                s.submitBtnText,
+                { color: canSubmit ? colors.textOnPrimary : colors.textMuted },
+              ]}
+            >
               {submitting ? 'Sending…' : 'Submit ticket'}
             </Text>
           </Pressable>
 
-          <Text style={[s.footerNote, { color: ui.textMuted }]}>
+          <Text style={[s.footerNote, { color: colors.textMuted }]}>
             Our team typically responds within 24 hours. You'll receive a reply at{' '}
-            <Text style={{ color: ui.text }}>{userEmail || 'your registered email'}</Text>.
+            <Text style={{ color: colors.text }}>{userEmail || 'your registered email'}</Text>.
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>

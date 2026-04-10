@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
   Image,
-  KeyboardAvoidingView,
   Modal,
   PanResponder,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -28,17 +28,50 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
 import { authEnabled, firebaseApp, firebaseReady, missingFirebaseConfig } from '../../lib/firebase';
 import {
-  formatE164International,
   migrateLegacyNational,
   releaseE164,
   reserveE164,
   validateToE164,
 } from '../../lib/phone';
-import { addCardPreviewAsset, greyCarAsset } from '../../assets/images';
+import { greyCarAsset } from '../../assets/images';
 import { AUTH_SESSION_KEY, useAuth } from '../../context/AuthContext';
 import { useAppTheme } from '../../theme/ThemeProvider';
-import SupportTicketScreen from './SupportTicketScreen';
+import { ProfileEditScreen } from './profile/ProfileEditScreen';
+import { ProfileScreen } from './profile/ProfileScreen';
+import { DEFAULT_PROFILE_CARDS, type ProfileCard } from './profile/profileTypes';
+import { SettingsAppearanceScreen } from './settings/SettingsAppearanceScreen';
+import { SettingsHelpScreen } from './settings/SettingsHelpScreen';
+import { SettingsLanguageScreen } from './settings/SettingsLanguageScreen';
+import { SettingsNotificationsScreen } from './settings/SettingsNotificationsScreen';
+import { SettingsPasswordScreen } from './settings/SettingsPasswordScreen';
+import { SettingsSupportScreen } from './settings/SettingsSupportScreen';
+import { SettingsTermsScreen } from './settings/SettingsTermsScreen';
+import {
+  fetchPlaceDetailsCoordinate,
+  isInJamaicaServiceArea,
+  KSA_MAP_CENTER,
+  parseLatLngFromString,
+  resolveLocationQuery,
+  reverseGeocodeMapPin,
+  type LatLng,
+} from './locationResolve';
+import {
+  PROFILE_HEADER_ICON_GLYPH,
+} from './mainScreenLayoutConstants';
+import { styles } from './styles/mainScreenStyles';
+import { ActivityTabScreen } from './tabs/ActivityTabScreen';
+import { FavouritesTabScreen } from './tabs/FavouritesTabScreen';
+import { SettingsTabScreen } from './tabs/SettingsTabScreen';
 import { usePushToken } from '../../hooks/usePushToken';
+import { ActiveRideScreen } from './ride/ActiveRideScreen';
+import type {
+  ActiveTripState,
+  TripRecord,
+  TripStatus,
+} from './ride/activeTripTypes';
+import { FindingDriverModal } from './ride/FindingDriverModal';
+import { estimateFareUsd } from './ride/rideFare';
+import { interpolateRoutePoint } from './ride/routeGeometry';
 
 const mockRideHistory = [
   { id: 'r1', from: 'Half-Way Tree', to: 'Norman Manley Airport', date: 'Today, 9:14 AM', price: '$12.40', driver: 'Marcus W.', rating: 5 },
@@ -64,49 +97,6 @@ function driverAvatar(name: string): { initials: string; color: string } {
   const color = DRIVER_AVATAR_COLORS[Math.abs(hash) % DRIVER_AVATAR_COLORS.length];
   return { initials, color };
 }
-
-type ActivityItem = {
-  id: string;
-  type: 'ride' | 'payment' | 'profile' | 'settings' | 'promo';
-  title: string;
-  subtitle: string;
-  time: string;
-  daysAgo: number;
-  icon: string;
-  emoji?: string;
-  iconBg: string;
-  rideData?: { id: string; from: string; to: string; date: string; price: string; driver: string; rating: number };
-};
-
-const ACTIVITY_FILTERS = [
-  { key: 'all' as const, label: 'All' },
-  { key: 'today' as const, label: 'Today' },
-  { key: 'yesterday' as const, label: 'Yesterday' },
-  { key: '7days' as const, label: 'Last 7 Days' },
-  { key: 'month' as const, label: 'Last Month' },
-];
-
-const mockActivityFeed: ActivityItem[] = [
-  { id: 'a1', type: 'ride', title: 'Half-Way Tree → Norman Manley Airport', subtitle: 'Marcus W. · $12.40', time: 'Today, 9:14 AM', daysAgo: 0, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r1', from: 'Half-Way Tree', to: 'Norman Manley Airport', date: 'Today, 9:14 AM', price: '$12.40', driver: 'Marcus W.', rating: 5 } },
-  { id: 'a2', type: 'payment', title: 'Visa card added', subtitle: '····4242 · Payment method', time: 'Today, 8:30 AM', daysAgo: 0, icon: 'card-outline', emoji: '💳', iconBg: '#52b788' },
-  { id: 'a3', type: 'ride', title: 'New Kingston → Portmore Mall', subtitle: 'Diana R. · $8.20', time: 'Yesterday, 3:45 PM', daysAgo: 1, icon: 'car', iconBg: '#e2844a', rideData: { id: 'r2', from: 'New Kingston', to: 'Portmore Mall', date: 'Yesterday, 3:45 PM', price: '$8.20', driver: 'Diana R.', rating: 4 } },
-  { id: 'a4', type: 'settings', title: 'Notifications updated', subtitle: 'Email alerts enabled', time: 'Yesterday, 1:00 PM', daysAgo: 1, icon: 'notifications-outline', emoji: '🔔', iconBg: '#9b72cf' },
-  { id: 'a5', type: 'profile', title: 'Profile photo updated', subtitle: 'Display name changed', time: 'Yesterday, 10:15 AM', daysAgo: 1, icon: 'person-outline', emoji: '👤', iconBg: '#e25c6a' },
-  { id: 'a6', type: 'ride', title: 'Liguanea → Half-Way Tree', subtitle: 'Trevor A. · $5.10', time: 'Apr 7, 11:30 AM', daysAgo: 2, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r3', from: 'Liguanea', to: 'Half-Way Tree', date: 'Apr 7, 11:30 AM', price: '$5.10', driver: 'Trevor A.', rating: 5 } },
-  { id: 'a7', type: 'promo', title: 'Promo code applied', subtitle: 'RIDR20 · 20% off your next ride', time: 'Apr 7, 11:28 AM', daysAgo: 2, icon: 'pricetag-outline', emoji: '🏷️', iconBg: '#FFB800' },
-  { id: 'a8', type: 'ride', title: 'Downtown Kingston → New Kingston', subtitle: 'Sandra M. · $6.80', time: 'Apr 6, 8:00 AM', daysAgo: 3, icon: 'car', iconBg: '#e2844a', rideData: { id: 'r4', from: 'Downtown Kingston', to: 'New Kingston', date: 'Apr 6, 8:00 AM', price: '$6.80', driver: 'Sandra M.', rating: 4 } },
-  { id: 'a9', type: 'settings', title: 'Dark mode enabled', subtitle: 'Appearance settings changed', time: 'Apr 5, 9:45 PM', daysAgo: 4, icon: 'settings-outline', emoji: '⚙️', iconBg: '#3bbfa3' },
-  { id: 'a10', type: 'ride', title: 'Constant Spring → Liguanea', subtitle: 'Devon P. · $4.90', time: 'Apr 5, 7:20 PM', daysAgo: 4, icon: 'car', iconBg: '#52b788', rideData: { id: 'r5', from: 'Constant Spring', to: 'Liguanea', date: 'Apr 5, 7:20 PM', price: '$4.90', driver: 'Devon P.', rating: 5 } },
-  { id: 'a11', type: 'payment', title: 'Mastercard removed', subtitle: '····7890 · Payment method', time: 'Apr 2, 2:00 PM', daysAgo: 7, icon: 'card-outline', emoji: '💳', iconBg: '#e25c6a' },
-  { id: 'a12', type: 'profile', title: 'Email address updated', subtitle: 'Account security changed', time: 'Mar 30, 11:00 AM', daysAgo: 10, icon: 'mail-outline', emoji: '📧', iconBg: '#4a90e2' },
-  { id: 'a13', type: 'ride', title: 'Portmore → Liguanea', subtitle: 'Marcus W. · $9.50', time: 'Mar 28, 6:15 PM', daysAgo: 12, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r6', from: 'Portmore', to: 'Liguanea', date: 'Mar 28, 6:15 PM', price: '$9.50', driver: 'Marcus W.', rating: 5 } },
-];
-
-const mockFavouritePlaces = [
-  { id: 'f1', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' as const },
-  { id: 'f2', title: 'Sovereign Centre', subtitle: 'Hope Road, Kingston', icon: 'storefront' as const },
-  { id: 'f3', title: 'University of the West Indies', subtitle: 'Mona, Kingston', icon: 'business' as const },
-];
 
 const rideOptions = [
   {
@@ -136,7 +126,6 @@ const rideOptions = [
 ];
 
 const quickActions = ['Home', 'Work', 'Airport'];
-type LatLng = { latitude: number; longitude: number };
 type DestinationSuggestion = {
   id: string;
   title: string;
@@ -151,6 +140,10 @@ type SearchSuggestion = {
   subtitle: string;
   icon: 'airplane' | 'business' | 'location' | 'cafe' | 'storefront' | 'home' | 'briefcase';
   fullText?: string;
+  /** Google Places place_id — use Place Details for an exact pin (not geocoded text). */
+  placeId?: string;
+  /** Curated / known coordinate (quick picks). */
+  coordinate?: LatLng;
 };
 
 type SavedPlace = {
@@ -170,7 +163,12 @@ type MeResponse = {
   savedPlaces?: SavedPlace[];
 };
 
+type BookedRideRecord = TripRecord;
+
 const PROFILE_ME_CACHE_KEY = 'profile_me_cache_v1';
+const ACTIVE_TRIP_STORAGE_KEY = 'active_trip_v1';
+const BOOKED_RIDES_STORAGE_KEY = 'booked_rides_v1';
+const ACTIVE_TRIP_TTL_MS = 5 * 60 * 1000;
 
 function resolveBaseUrl(): string {
   const fromEnv = process.env.EXPO_PUBLIC_BASE_URL;
@@ -296,11 +294,11 @@ const destinationSuggestions = [
     coordinate: { latitude: 17.9770, longitude: -76.7915 },
   },
   {
-    id: 'portmore',
-    title: 'Portmore',
-    subtitle: 'St. Catherine, Jamaica',
+    id: 'constant-spring',
+    title: 'Constant Spring',
+    subtitle: 'St. Andrew, Kingston',
     icon: 'home' as const,
-    coordinate: { latitude: 17.9509, longitude: -76.8821 },
+    coordinate: { latitude: 18.0392, longitude: -76.7938 },
   },
 ] satisfies DestinationSuggestion[];
 
@@ -313,6 +311,7 @@ function decodeGooglePolyline(encoded: string): LatLng[] {
   let lat = 0;
   let lng = 0;
 
+  try {
   while (index < encoded.length) {
     let result = 0;
     let shift = 0;
@@ -337,120 +336,178 @@ function decodeGooglePolyline(encoded: string): LatLng[] {
 
     points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
   }
+  } catch {
+    return [];
+  }
 
   return points;
 }
 
-function interpolateRoutePoint(route: LatLng[], progress: number): LatLng | null {
-  if (route.length < 2) return route[0] ?? null;
-  const clamped = Math.max(0, Math.min(1, progress));
-
-  const segmentLengths: number[] = [];
-  let total = 0;
-  for (let i = 0; i < route.length - 1; i += 1) {
-    const a = route[i];
-    const b = route[i + 1];
-    const dx = b.longitude - a.longitude;
-    const dy = b.latitude - a.latitude;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    segmentLengths.push(len);
-    total += len;
-  }
-  if (total <= 0) return route[0];
-
-  const target = clamped * total;
-  let traversed = 0;
-
-  for (let i = 0; i < segmentLengths.length; i += 1) {
-    const seg = segmentLengths[i];
-    const next = traversed + seg;
-    if (target <= next) {
-      const local = seg > 0 ? (target - traversed) / seg : 0;
-      const start = route[i];
-      const end = route[i + 1];
-      return {
-        latitude: start.latitude + (end.latitude - start.latitude) * local,
-        longitude: start.longitude + (end.longitude - start.longitude) * local,
-      };
-    }
-    traversed = next;
-  }
-
-  return route[route.length - 1];
-}
-
-async function geocodeAddress(
-  address: string,
-  apiKey?: string
-): Promise<{ coordinate: LatLng | null; issue?: string }> {
-  const q = address.trim();
-  if (!q) return { coordinate: null, issue: 'Empty address' };
-  if (apiKey) {
-    try {
-      const url =
-        `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}` +
-        `&key=${apiKey}`;
-      const response = await fetch(url);
-      const data = (await response.json()) as {
-        status?: string;
-        error_message?: string;
-        results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
-      };
-      const loc = data.results?.[0]?.geometry?.location;
-      if (typeof loc?.lat === 'number' && typeof loc?.lng === 'number') {
-        return { coordinate: { latitude: loc.lat, longitude: loc.lng } };
-      }
-      if (data.status && data.status !== 'OK') {
-        return {
-          coordinate: null,
-          issue: `Geocode(${q}) ${data.status}${data.error_message ? `: ${data.error_message}` : ''}`,
-        };
-      }
-    } catch {
-      /* fall through to device geocoder */
-    }
-  }
-
-  try {
-    const local = await Location.geocodeAsync(q);
-    if (local[0]) {
-      return { coordinate: { latitude: local[0].latitude, longitude: local[0].longitude } };
-    }
-  } catch {
-    /* noop */
-  }
-  return { coordinate: null, issue: `Could not geocode "${q}"` };
-}
-
 const MAP_HEIGHT = 400;
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+/** Pinterest-style long-press: circular actions around the map point (angles in radians). */
+const MAP_RADIAL_BTN = 54;
+const MAP_RADIAL_R = 74;
+const MAP_RADIAL_FROM_DX = MAP_RADIAL_R * Math.cos((168 * Math.PI) / 180);
+const MAP_RADIAL_FROM_DY = MAP_RADIAL_R * Math.sin((168 * Math.PI) / 180);
+const MAP_RADIAL_TO_DX = MAP_RADIAL_R * Math.cos((-34 * Math.PI) / 180);
+const MAP_RADIAL_TO_DY = MAP_RADIAL_R * Math.sin((-34 * Math.PI) / 180);
+/** Finger must start within this radius of the anchor to drag toward From/To. */
+const MAP_RADIAL_DRAG_ANCHOR_RADIUS = 56;
+/** Drag this far from the start to reveal the From/To icons. */
+const MAP_RADIAL_REVEAL_DISTANCE = 22;
+const MAP_RADIAL_HIT_EXTRA = 10;
+
+function clampMapRadialFab(left: number, top: number, size: number) {
+  const pad = 10;
+  const topPad = 52;
+  const bottomPad = 100;
+  return {
+    left: Math.max(pad, Math.min(SCREEN_WIDTH - size - pad, left)),
+    top: Math.max(topPad, Math.min(SCREEN_HEIGHT - size - bottomPad, top)),
+  };
+}
+
+function getRadialFabCenters(anchor: { x: number; y: number }) {
+  const ax = anchor.x;
+  const ay = anchor.y;
+  const fromRect = clampMapRadialFab(
+    ax + MAP_RADIAL_FROM_DX - MAP_RADIAL_BTN / 2,
+    ay + MAP_RADIAL_FROM_DY - MAP_RADIAL_BTN / 2,
+    MAP_RADIAL_BTN
+  );
+  const toRect = clampMapRadialFab(
+    ax + MAP_RADIAL_TO_DX - MAP_RADIAL_BTN / 2,
+    ay + MAP_RADIAL_TO_DY - MAP_RADIAL_BTN / 2,
+    MAP_RADIAL_BTN
+  );
+  return {
+    fromCenter: { x: fromRect.left + MAP_RADIAL_BTN / 2, y: fromRect.top + MAP_RADIAL_BTN / 2 },
+    toCenter: { x: toRect.left + MAP_RADIAL_BTN / 2, y: toRect.top + MAP_RADIAL_BTN / 2 },
+  };
+}
+
+const mapRadialStyles = StyleSheet.create({
+  fabLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100,
+    elevation: 100,
+  },
+  fab: {
+    position: 'absolute',
+    width: MAP_RADIAL_BTN,
+    height: MAP_RADIAL_BTN,
+    borderRadius: MAP_RADIAL_BTN / 2,
+    backgroundColor: 'rgba(28,28,30,0.94)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 101,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    elevation: 24,
+  },
+  fabDisabled: {
+    opacity: 0.42,
+  },
+  fabPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.94 }],
+  },
+  anchorLoader: {
+    position: 'absolute',
+    zIndex: 19,
+    width: 28,
+    height: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  anchorDot: {
+    position: 'absolute',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderWidth: 2,
+    borderColor: 'rgba(28,28,30,0.85)',
+    zIndex: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+});
+
+/** Visual only — selection is handled by pan release hit-testing on the map pick overlay. */
+function MapRadialFabs({
+  anchor,
+  radialRevealed,
+  resolving,
+}: {
+  anchor: { x: number; y: number };
+  radialRevealed: boolean;
+  resolving: boolean;
+}) {
+  const ax = anchor.x;
+  const ay = anchor.y;
+  const fromPos = clampMapRadialFab(
+    ax + MAP_RADIAL_FROM_DX - MAP_RADIAL_BTN / 2,
+    ay + MAP_RADIAL_FROM_DY - MAP_RADIAL_BTN / 2,
+    MAP_RADIAL_BTN
+  );
+  const toPos = clampMapRadialFab(
+    ax + MAP_RADIAL_TO_DX - MAP_RADIAL_BTN / 2,
+    ay + MAP_RADIAL_TO_DY - MAP_RADIAL_BTN / 2,
+    MAP_RADIAL_BTN
+  );
+  const show = radialRevealed && !resolving;
+  return (
+    <View style={mapRadialStyles.fabLayer} pointerEvents="none">
+      <View style={[mapRadialStyles.anchorDot, { left: ax - 8, top: ay - 8 }]} />
+      {resolving ? (
+        <View style={[mapRadialStyles.anchorLoader, { left: ax - 14, top: ay - 14 }]}>
+          <ActivityIndicator color="#ffffff" />
+        </View>
+      ) : null}
+      {show ? (
+        <>
+          <View
+            accessibilityLabel="From"
+            style={[mapRadialStyles.fab, { left: fromPos.left, top: fromPos.top }]}
+          >
+            <Ionicons name="location" size={24} color="#ffffff" />
+          </View>
+          <View
+            accessibilityLabel="To"
+            style={[mapRadialStyles.fab, { left: toPos.left, top: toPos.top }]}
+          >
+            <Ionicons name="flag" size={24} color="#ffffff" />
+          </View>
+        </>
+      ) : null}
+    </View>
+  );
+}
 /** Height of the home bottom sheet (from `contentScroll` top inset to bottom of screen). */
 const BOTTOM_SHEET_HEIGHT = SCREEN_HEIGHT - (MAP_HEIGHT - 30);
+/** Top inset when the sheet is expanded for search (status bar + breathing room). */
+const SHEET_FOCUS_TOP = Math.max(0, (Constants.statusBarHeight ?? StatusBar.currentHeight ?? 0) + 8);
 /** Visible height of the bottom sheet when minimized (handle + peek). */
 const MINIMIZED_SHEET_PEEK = 88;
 /** `translateY` to leave ~`MINIMIZED_SHEET_PEEK` of the sheet visible when minimized. */
 const SHEET_MINIMIZED_OFFSET = Math.max(0, BOTTOM_SHEET_HEIGHT - MINIMIZED_SHEET_PEEK);
-/** Tab bar `bottom` + `height` from styles — used to float controls above the tab bar. */
-const TAB_BAR_RESERVED_BOTTOM = 16 + 68;
+/** Matches `tabBar`: bottom inset + height — float controls just above it. */
+const TAB_BAR_BOTTOM_OFFSET = 16 + 68;
+/** Sheet height when search fields are focused (stops above floating tab bar). */
+const BOTTOM_SHEET_FULLSCREEN_HEIGHT = SCREEN_HEIGHT - SHEET_FOCUS_TOP - TAB_BAR_BOTTOM_OFFSET;
+const SHEET_RESTORE_BTN_BOTTOM = TAB_BAR_BOTTOM_OFFSET + 14;
 const ANIMATION_TREE_KEY = 'animation-tree-v2';
 
 /** Line heights for header greeting + name — profile avatar matches this total height. */
-const PROFILE_GREETING_LINE_HEIGHT = 18;
-const PROFILE_NAME_LINE_HEIGHT = 30;
-const PROFILE_HEADER_TEXT_HEIGHT = PROFILE_GREETING_LINE_HEIGHT + PROFILE_NAME_LINE_HEIGHT;
-const PROFILE_HEADER_ICON_GLYPH = Math.round(PROFILE_HEADER_TEXT_HEIGHT * 0.62);
-
-type ProfileCard = {
-  id: string;
-  type: 'visa' | 'mastercard';
-  last4: string;
-  label: string;
-};
-
-const DEFAULT_PROFILE_CARDS: ProfileCard[] = [
-  { id: '1', type: 'visa', last4: '4242', label: 'Prepaid Visa' },
-  { id: '2', type: 'mastercard', last4: '8888', label: 'Ridr Mastercard' },
-];
 
 // Header notifications icon
 function SupportIcon({ color = '#ffffff' }: { color?: string }) {
@@ -478,12 +535,26 @@ export default function MainScreen() {
   const [favSearchOpen, setFavSearchOpen] = useState(false);
   const [selectedRideDetail, setSelectedRideDetail] = useState<typeof mockRideHistory[0] | null>(null);
   const [screen, setScreen] = useState<
-    'home' | 'profile' | 'profileEdit' |
+    'home' | 'activeRide' | 'profile' | 'profileEdit' |
     'settingsNotifications' | 'settingsPassword' | 'settingsLanguage' |
     'settingsAppearance' | 'settingsHelp' | 'settingsTerms' | 'settingsSupport'
   >('home');
-  const [mapExpanded, setMapExpanded] = useState(false);
   const [sheetMinimized, setSheetMinimized] = useState(false);
+  /** Long-press on map → choose whether to fill From or To. */
+  const mapViewRef = useRef<MapView | null>(null);
+  const mapMeasureRef = useRef<View | null>(null);
+  const [mapLocationAction, setMapLocationAction] = useState<{
+    coordinate: LatLng;
+    label: string;
+    resolving: boolean;
+    radialRevealed: boolean;
+    anchorScreen: { x: number; y: number } | null;
+  } | null>(null);
+  const mapLocationActionRef = useRef(mapLocationAction);
+  mapLocationActionRef.current = mapLocationAction;
+  const applyMapFromRef = useRef<(label: string) => void>(() => {});
+  const applyMapToRef = useRef<(label: string) => void>(() => {});
+  const mapRadialStartNearAnchor = useRef(false);
   const sheetMinimizedRef = useRef(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
@@ -514,7 +585,6 @@ export default function MainScreen() {
   const [addressInput, setAddressInput] = useState('');
   const [destinationQuery, setDestinationQuery] = useState('');
   const [destinationFocused, setDestinationFocused] = useState(false);
-  const [searchExpanded, setSearchExpanded] = useState(false);
   const destinationInputRef = useRef<TextInput>(null);
   const [toQuery, setToQuery] = useState('');
   const [toFocused, setToFocused] = useState(false);
@@ -522,13 +592,24 @@ export default function MainScreen() {
   const [toApiSuggestions, setToApiSuggestions] = useState<SearchSuggestion[]>([]);
   const [destinationApiSuggestions, setDestinationApiSuggestions] = useState<SearchSuggestion[]>([]);
   const [destinationPreviewCoordinate, setDestinationPreviewCoordinate] = useState<LatLng | null>(null);
+  const [originPreviewCoordinate, setOriginPreviewCoordinate] = useState<LatLng | null>(null);
   const [currentLocationLabel, setCurrentLocationLabel] = useState('Current location');
   const [roadRouteCoords, setRoadRouteCoords] = useState<LatLng[]>([]);
   const [routeAnimatorPoint, setRouteAnimatorPoint] = useState<LatLng | null>(null);
   const [routeIssue, setRouteIssue] = useState<string | null>(null);
+  const [routeDurationSec, setRouteDurationSec] = useState(0);
+  const [routeDistanceM, setRouteDistanceM] = useState(0);
+  const [findingDriverVisible, setFindingDriverVisible] = useState(false);
+  const [findingDriverPhase, setFindingDriverPhase] = useState<'searching' | 'readySwipe' | 'no_driver_found'>('searching');
+  const [activeTrip, setActiveTrip] = useState<ActiveTripState | null>(null);
+  const [bookedRides, setBookedRides] = useState<BookedRideRecord[]>([]);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [refreshingMain, setRefreshingMain] = useState(false);
   const toInputRef = useRef<TextInput>(null);
   const toFocusedRef = useRef(false);
   const destinationFocusedRef = useRef(false);
+  const toBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destinationBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Support modal
   const [supportVisible, setSupportVisible] = useState(false);
@@ -782,7 +863,7 @@ export default function MainScreen() {
   }, [sheetMinimized]);
 
   useEffect(() => {
-    if (selectedRide === 'rental') setSelectedRide('ride');
+    if (selectedRide === 'rental' || selectedRide === 'outstation') setSelectedRide('ride');
   }, [selectedRide]);
 
   useEffect(() => {
@@ -792,24 +873,53 @@ export default function MainScreen() {
   }, [userLocation, toUserEdited, currentLocationLabel]);
 
   useEffect(() => {
-    const hasFrom = !!toQuery.trim();
-    const hasTo = !!destinationQuery.trim();
-    if (hasFrom || !hasTo || userLocation) {
+    const q = destinationQuery.trim();
+    if (!q) {
       setDestinationPreviewCoordinate(null);
       return;
     }
-
     let cancelled = false;
-    (async () => {
-      const { key: mapsApiKey } = resolveGoogleMapsApiKey();
-      const destination = await geocodeAddress(destinationQuery, mapsApiKey ?? undefined);
-      if (!cancelled) setDestinationPreviewCoordinate(destination.coordinate);
-    })();
-
+    const t = setTimeout(() => {
+      void (async () => {
+        const { key: mapsApiKey } = resolveGoogleMapsApiKey();
+        const destination = await resolveLocationQuery(q, mapsApiKey ?? undefined);
+        if (!cancelled) setDestinationPreviewCoordinate(destination.coordinate);
+      })();
+    }, 280);
     return () => {
       cancelled = true;
+      clearTimeout(t);
     };
-  }, [toQuery, destinationQuery, userLocation]);
+  }, [destinationQuery]);
+
+  useEffect(() => {
+    const q = toQuery.trim();
+    const normalized = q.toLowerCase();
+    const isCurrentFrom =
+      !!userLocation &&
+      (normalized === 'current location' || normalized === currentLocationLabel.toLowerCase());
+    if (!q || isCurrentFrom) {
+      setOriginPreviewCoordinate(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      void (async () => {
+        const { key: mapsApiKey } = resolveGoogleMapsApiKey();
+        const hit = destinationSuggestions.find((s) => s.title.toLowerCase() === normalized)?.coordinate;
+        if (hit) {
+          if (!cancelled) setOriginPreviewCoordinate(hit);
+          return;
+        }
+        const origin = await resolveLocationQuery(q, mapsApiKey ?? undefined);
+        if (!cancelled) setOriginPreviewCoordinate(origin.coordinate);
+      })();
+    }, 280);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [toQuery, userLocation, currentLocationLabel]);
 
   useEffect(() => {
     const normalizedFrom = toQuery.trim().toLowerCase();
@@ -823,6 +933,8 @@ export default function MainScreen() {
     if (!hasBothInputs) {
       setRoadRouteCoords([]);
       setRouteIssue(null);
+      setRouteDurationSec(0);
+      setRouteDistanceM(0);
       return;
     }
 
@@ -834,7 +946,7 @@ export default function MainScreen() {
             s => s.title.toLowerCase() === normalizedFrom,
           )?.coordinate
             ? { coordinate: destinationSuggestions.find(s => s.title.toLowerCase() === normalizedFrom)?.coordinate ?? null }
-            : await geocodeAddress(toQuery, mapsApiKey ?? undefined);
+            : await resolveLocationQuery(toQuery, mapsApiKey ?? undefined);
 
         const origin =
           (isCurrentFrom ? userLocation : null) ??
@@ -850,13 +962,15 @@ export default function MainScreen() {
                     s => s.title.toLowerCase() === destinationNormalized,
                   )?.coordinate ?? null,
               }
-            : await geocodeAddress(destinationQuery, mapsApiKey ?? undefined);
+            : await resolveLocationQuery(destinationQuery, mapsApiKey ?? undefined);
 
         const destination = destinationResult.coordinate;
 
         if (!origin || !destination) {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteDurationSec(0);
+            setRouteDistanceM(0);
             setRouteIssue(
               `Could not resolve origin/destination. ${originResult.issue ?? ''} ${destinationResult.issue ?? ''}`.trim()
             );
@@ -867,6 +981,8 @@ export default function MainScreen() {
         if (!mapsApiKey) {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteDurationSec(0);
+            setRouteDistanceM(0);
             setRouteIssue(
               `Missing Google Maps key for road routing. Checked: env/expoConfig/manifest/manifest2 (found: ${mapsApiKeySource}).`
             );
@@ -883,36 +999,70 @@ export default function MainScreen() {
         if (!response.ok) {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteDurationSec(0);
+            setRouteDistanceM(0);
             setRouteIssue(`Directions HTTP ${response.status}`);
           }
           return;
         }
-        const data = (await response.json()) as {
+        let data: {
           status?: string;
           error_message?: string;
-          routes?: Array<{ overview_polyline?: { points?: string } }>;
+          routes?: Array<{
+            overview_polyline?: { points?: string };
+            legs?: Array<{ duration?: { value?: number }; distance?: { value?: number } }>;
+          }>;
         };
+        try {
+          data = (await response.json()) as typeof data;
+        } catch {
+          if (!cancelled) {
+            setRoadRouteCoords([]);
+            setRouteDurationSec(0);
+            setRouteDistanceM(0);
+            setRouteIssue('Could not read directions response.');
+          }
+          return;
+        }
         if (data.status !== 'OK') {
           if (!cancelled) {
             setRoadRouteCoords([]);
+            setRouteDurationSec(0);
+            setRouteDistanceM(0);
             setRouteIssue(
               `Directions unavailable (${data.status ?? 'unknown'})${data.error_message ? `: ${data.error_message}` : ''}.`
             );
           }
           return;
         }
+        const leg = data.routes?.[0]?.legs?.[0];
+        const durationSec = typeof leg?.duration?.value === 'number' ? leg.duration.value : 0;
+        const distanceM = typeof leg?.distance?.value === 'number' ? leg.distance.value : 0;
         const encoded = data.routes?.[0]?.overview_polyline?.points;
         if (!cancelled && encoded) {
           const decoded = decodeGooglePolyline(encoded);
-          setRoadRouteCoords(decoded.length > 1 ? decoded : []);
-          setRouteIssue(decoded.length > 1 ? null : 'No route geometry returned.');
+          if (decoded.length > 1) {
+            setRoadRouteCoords(decoded);
+            setRouteIssue(null);
+            setRouteDurationSec(durationSec);
+            setRouteDistanceM(distanceM);
+          } else if (!cancelled) {
+            setRoadRouteCoords([]);
+            setRouteDurationSec(0);
+            setRouteDistanceM(0);
+            setRouteIssue('No route geometry returned.');
+          }
         } else if (!cancelled) {
           setRoadRouteCoords([]);
+          setRouteDurationSec(0);
+          setRouteDistanceM(0);
           setRouteIssue('No route geometry returned.');
         }
       } catch (err) {
         if (!cancelled) {
           setRoadRouteCoords([]);
+          setRouteDurationSec(0);
+          setRouteDistanceM(0);
           setRouteIssue(`Failed to fetch road directions: ${err instanceof Error ? err.message : 'unknown error'}`);
         }
       }
@@ -922,6 +1072,112 @@ export default function MainScreen() {
       cancelled = true;
     };
   }, [toQuery, destinationQuery, userLocation, currentLocationLabel]);
+
+  useEffect(() => {
+    if (!findingDriverVisible || findingDriverPhase !== 'searching') return;
+    const readyT = setTimeout(() => setFindingDriverPhase('readySwipe'), 5000);
+    const timeoutT = setTimeout(() => setFindingDriverPhase('no_driver_found'), 11000);
+    return () => {
+      clearTimeout(readyT);
+      clearTimeout(timeoutT);
+    };
+  }, [findingDriverVisible, findingDriverPhase]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const raw = await AsyncStorage.getItem(ACTIVE_TRIP_STORAGE_KEY);
+      if (!raw) return;
+      try {
+        const parsedRaw = JSON.parse(raw) as ActiveTripState & { bookedFor?: 'self' | 'friend'; status?: TripStatus };
+        const parsed: ActiveTripState = {
+          ...parsedRaw,
+          bookedFor: parsedRaw.bookedFor === 'friend' ? 'friend' : 'self',
+          status: parsedRaw.status ?? 'in_trip',
+        };
+        if (parsed.expiresAtMs > Date.now()) {
+          setActiveTrip(parsed);
+        } else {
+          await AsyncStorage.removeItem(ACTIVE_TRIP_STORAGE_KEY);
+        }
+      } catch {
+        await AsyncStorage.removeItem(ACTIVE_TRIP_STORAGE_KEY);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const raw = await AsyncStorage.getItem(BOOKED_RIDES_STORAGE_KEY);
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw) as Array<BookedRideRecord & { bookedFor?: 'self' | 'friend'; status?: TripStatus }>;
+        if (!Array.isArray(parsed)) return;
+        setBookedRides(
+          parsed
+            .filter((r) => !!r?.id)
+            .map((r) => ({
+              ...r,
+              bookedFor: r.bookedFor === 'friend' ? 'friend' : 'self',
+              status: r.status ?? (r.completedAtMs ? 'completed' : r.cancelledAtMs ? 'cancelled' : 'in_trip'),
+            }))
+        );
+      } catch {
+        await AsyncStorage.removeItem(BOOKED_RIDES_STORAGE_KEY);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!activeTrip) return;
+    if (activeTrip.expiresAtMs > nowMs) return;
+    setActiveTrip(null);
+    if (screen === 'activeRide') setScreen('home');
+    void AsyncStorage.removeItem(ACTIVE_TRIP_STORAGE_KEY);
+  }, [activeTrip, nowMs, screen]);
+
+  const onRefreshMain = useCallback(() => {
+    setRefreshingMain(true);
+    void (async () => {
+      try {
+        const [tripRaw, bookedRaw] = await Promise.all([
+          AsyncStorage.getItem(ACTIVE_TRIP_STORAGE_KEY),
+          AsyncStorage.getItem(BOOKED_RIDES_STORAGE_KEY),
+        ]);
+        if (tripRaw) {
+          const parsedRaw = JSON.parse(tripRaw) as ActiveTripState & { bookedFor?: 'self' | 'friend'; status?: TripStatus };
+          const parsed: ActiveTripState = {
+            ...parsedRaw,
+            bookedFor: parsedRaw.bookedFor === 'friend' ? 'friend' : 'self',
+            status: parsedRaw.status ?? 'in_trip',
+          };
+          if (parsed.expiresAtMs > Date.now()) setActiveTrip(parsed);
+        }
+        if (bookedRaw) {
+          const parsed = JSON.parse(bookedRaw) as Array<BookedRideRecord & { bookedFor?: 'self' | 'friend'; status?: TripStatus }>;
+          if (Array.isArray(parsed)) {
+            setBookedRides(
+              parsed
+                .filter((r) => !!r?.id)
+                .map((r) => ({
+                  ...r,
+                  bookedFor: r.bookedFor === 'friend' ? 'friend' : 'self',
+                  status: r.status ?? (r.completedAtMs ? 'completed' : r.cancelledAtMs ? 'cancelled' : 'in_trip'),
+                }))
+            );
+          }
+        }
+      } catch {
+        // no-op refresh fallback
+      } finally {
+        setTimeout(() => setRefreshingMain(false), 500);
+      }
+    })();
+  }, []);
 
   const saveAddress = async () => {
     if (!addressModal) return;
@@ -938,21 +1194,35 @@ export default function MainScreen() {
 
   const displayName = userFirstName.trim() || 'Ridr';
   const shortUserId = userId.trim() ? userId.trim().slice(0, 5) : '';
-  const ui = {
-    screenBg: isDark ? '#0c0c0d' : '#f5f5f5',
-    panelBg: isDark ? '#151517' : '#ffffff',
-    cardBg: isDark ? '#1b1c20' : '#ffffff',
-    softBg: isDark ? '#202227' : '#f7f7f7',
-    text: isDark ? '#f5f5f5' : '#171717',
-    textMuted: isDark ? '#a1a1aa' : '#666666',
-    divider: isDark ? '#2b2b31' : '#e9e9e9',
-    placeholder: isDark ? '#7b7b85' : '#aaaaaa',
-    headerOverlay: isDark ? 'rgba(12,12,13,0.88)' : 'rgba(255,255,255,0.82)',
-    tabActive: isDark ? '#f5f5f5' : '#1a1a1a',
-    tabInactive: isDark ? '#b3b3c2' : '#aaaaaa',
-    ctaBg: isDark ? '#ffd54a' : '#171717',
-    ctaText: isDark ? '#171717' : '#ffffff',
-  } as const;
+  const ui = useMemo(
+    () => ({
+      screenBg: colors.background,
+      panelBg: colors.surface,
+      cardBg: colors.card,
+      softBg: colors.softBg,
+      text: colors.text,
+      textMuted: colors.textMuted,
+      divider: colors.border,
+      placeholder: colors.textPlaceholder,
+      headerOverlay: colors.headerOverlay,
+      tabActive: colors.tabActive,
+      tabInactive: colors.tabInactive,
+      ctaBg: colors.primary,
+      ctaText: colors.textOnPrimary,
+      success: colors.success,
+      successContainer: colors.successContainer,
+      danger: colors.danger,
+      buttonDisabled: colors.buttonDisabled,
+    }),
+    [colors]
+  );
+  const estimatedFareUsd = useMemo(
+    () => estimateFareUsd(routeDistanceM, routeDurationSec),
+    [routeDistanceM, routeDurationSec]
+  );
+  const rideEtaLabel =
+    routeDurationSec > 0 ? `${Math.max(1, Math.round(routeDurationSec / 60))} min` : '—';
+  const rideFareLabel = `$${estimatedFareUsd.toFixed(2)}`;
   const savedPlacesSummary =
     savedPlaces.length > 0
       ? savedPlaces
@@ -1062,12 +1332,6 @@ export default function MainScreen() {
     );
   };
 
-  const countryCodes = [
-    { code: '+1', label: 'US / CA' },
-    { code: '+44', label: 'UK' },
-    { code: '+91', label: 'India' },
-  ];
-
   const openAddress = (type: 'home' | 'work') => {
     setAddressInput(type === 'home' ? homeAddress : workAddress);
     setAddressModal(type);
@@ -1110,7 +1374,6 @@ export default function MainScreen() {
     closeAddCardSheet();
   };
 
-  const mapCenter = destinationPreviewCoordinate ?? userLocation ?? JAMAICA_KINGSTON;
   const toNormalized = toQuery.trim().toLowerCase();
   const isCurrentLocationQuery =
     !!userLocation &&
@@ -1120,8 +1383,185 @@ export default function MainScreen() {
     roadRouteCoords.length > 0 ? roadRouteCoords[roadRouteCoords.length - 1] : null;
   const hasRouteInputs = !!toQuery.trim() && !!destinationQuery.trim();
   const hasRoute = hasRouteInputs && roadRouteCoords.length > 1;
-  const showPickupPoint = !!userLocation && isCurrentLocationQuery && !hasRoute;
-  const showDestinationOnlyPoint = !hasRoute && !showPickupPoint && !!destinationPreviewCoordinate;
+  const latestBookedRide =
+    bookedRides.find(
+      (r) =>
+        r.expiresAtMs > nowMs &&
+        r.status !== 'completed' &&
+        r.status !== 'cancelled'
+    ) ?? null;
+  const presentRide =
+    (activeTrip && activeTrip.expiresAtMs > nowMs ? activeTrip : null) ??
+    latestBookedRide;
+  const [bookingFor, setBookingFor] = useState<'self' | 'friend'>('self');
+  const [selectedPaymentLabel, setSelectedPaymentLabel] = useState<'Card' | 'Cash'>('Card');
+  const startFindingDriver = (forWhom: 'self' | 'friend') => {
+    if (!hasRoute || routeIssue) {
+      Alert.alert('Route required', 'Enter pickup and destination and wait for the route to load.');
+      return;
+    }
+    if (!pickupCoordinate || !dropoffCoordinate) {
+      Alert.alert('Route required', 'Could not determine pickup and drop-off points.');
+      return;
+    }
+    setBookingFor(forWhom);
+    setFindingDriverPhase('searching');
+    setFindingDriverVisible(true);
+  };
+  const openFindingDriver = () => {
+    if (presentRide) {
+      Alert.alert(
+        'Existing ride found',
+        'Book this next ride for yourself or a friend?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Myself', onPress: () => startFindingDriver('self') },
+          { text: 'A friend', onPress: () => startFindingDriver('friend') },
+        ]
+      );
+      return;
+    }
+    startFindingDriver('self');
+  };
+  const confirmRideRequest = () => {
+    if (!pickupCoordinate || !dropoffCoordinate || roadRouteCoords.length < 2) return;
+    const driverCoord = interpolateRoutePoint(roadRouteCoords, 0.22) ?? pickupCoordinate;
+    const pin = String(Math.floor(1000 + Math.random() * 9000));
+    const bookedAtMs = Date.now();
+    const nextTrip: ActiveTripState = {
+      id: `trip_${bookedAtMs}`,
+      bookedAtMs,
+      expiresAtMs: bookedAtMs + ACTIVE_TRIP_TTL_MS,
+      bookedFor: bookingFor,
+      status: 'driver_arriving',
+      pickup: pickupCoordinate,
+      dropoff: dropoffCoordinate,
+      routeCoords: roadRouteCoords,
+      fromLabel: toQuery.trim(),
+      toLabel: destinationQuery.trim(),
+      fareUsd: estimatedFareUsd,
+      etaMinutes: Math.max(1, Math.round(routeDurationSec / 60) || 1),
+      driverPin: pin,
+      plate: `P ${Math.floor(1000 + Math.random() * 9000)}`,
+      carDetails: 'Toyota Corolla · Silver',
+      driverName: 'Marcus W.',
+      driverCoordinate: driverCoord,
+      paymentLabel: selectedPaymentLabel,
+    };
+    setActiveTrip(nextTrip);
+    setBookedRides((prev) => {
+      const next = [nextTrip, ...prev.filter((r) => r.id !== nextTrip.id)].slice(0, 30);
+      void AsyncStorage.setItem(BOOKED_RIDES_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+    void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(nextTrip));
+    setFindingDriverVisible(false);
+    setFindingDriverPhase('searching');
+    setBookingFor('self');
+    setSelectedPaymentLabel('Card');
+    setScreen('activeRide');
+  };
+  const closeFindingDriver = () => {
+    setFindingDriverVisible(false);
+    setFindingDriverPhase('searching');
+    setBookingFor('self');
+    setSelectedPaymentLabel('Card');
+  };
+  const retryFindingDriver = () => {
+    setFindingDriverPhase('searching');
+  };
+  const persistTripRecord = (trip: ActiveTripState) => {
+    setBookedRides((prev) => {
+      const next = [trip, ...prev.filter((r) => r.id !== trip.id)].slice(0, 40);
+      void AsyncStorage.setItem(BOOKED_RIDES_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+    if (trip.status === 'completed' || trip.status === 'cancelled') {
+      setActiveTrip(null);
+      void AsyncStorage.removeItem(ACTIVE_TRIP_STORAGE_KEY);
+    } else {
+      setActiveTrip(trip);
+      void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(trip));
+    }
+  };
+  const updateActiveTripStatus = (status: TripStatus) => {
+    if (!activeTrip) return;
+    const now = Date.now();
+    const next: ActiveTripState = {
+      ...activeTrip,
+      status,
+      startedAtMs: status === 'in_trip' ? (activeTrip.startedAtMs ?? now) : activeTrip.startedAtMs,
+      completedAtMs: status === 'completed' ? now : activeTrip.completedAtMs,
+    };
+    persistTripRecord(next);
+  };
+  const completeActiveTrip = (rating: number, tipAmount: number) => {
+    if (!activeTrip) return;
+    const now = Date.now();
+    const durationMin = Math.max(1, Math.round((activeTrip.etaMinutes * 60) / 60));
+    const distanceKm = Math.max(1, routeDistanceM / 1000 || 1);
+    const baseFare = Number(activeTrip.fareUsd.toFixed(2));
+    const fees = Number((baseFare * 0.08).toFixed(2));
+    const totalFare = Number((baseFare + fees + tipAmount).toFixed(2));
+    const next: ActiveTripState = {
+      ...activeTrip,
+      status: 'completed',
+      completedAtMs: now,
+      durationMin,
+      distanceKm,
+      baseFare,
+      fees,
+      totalFare,
+      rating,
+      tipAmount,
+    };
+    persistTripRecord(next);
+    Alert.alert(
+      'Trip completed',
+      `Fare: $${totalFare.toFixed(2)}\nRating: ${rating}/5\nTip: $${tipAmount.toFixed(2)}`
+    );
+    setScreen('home');
+  };
+  const leaveActiveRideScreen = () => {
+    setScreen('home');
+  };
+  const openBookedRideFromActivity = (ride: BookedRideRecord) => {
+    if (ride.status === 'completed' || ride.status === 'cancelled') {
+      Alert.alert(
+        ride.status === 'completed' ? 'Trip completed' : 'Trip cancelled',
+        `${ride.fromLabel} → ${ride.toLabel}\nFare: $${(ride.totalFare ?? ride.fareUsd).toFixed(2)}`
+      );
+      return;
+    }
+    if (ride.expiresAtMs <= Date.now()) {
+      Alert.alert('Ride expired', 'This booked ride is no longer active.');
+      return;
+    }
+    setActiveTrip(ride);
+    setScreen('activeRide');
+  };
+  const showCurrentLocationPin = !hasRoute && isCurrentLocationQuery && !!userLocation;
+
+  useEffect(() => {
+    if (!activeTrip || activeTrip.status !== 'driver_arriving') return;
+    const tArrived = setTimeout(() => updateActiveTripStatus('arrived'), 15000);
+    return () => clearTimeout(tArrived);
+  }, [activeTrip?.id, activeTrip?.status]);
+  useEffect(() => {
+    if (!activeTrip || activeTrip.status !== 'arrived') return;
+    const tInTrip = setTimeout(() => updateActiveTripStatus('in_trip'), 8000);
+    return () => clearTimeout(tInTrip);
+  }, [activeTrip?.id, activeTrip?.status]);
+  useEffect(() => {
+    if (!activeTrip || activeTrip.status !== 'in_trip') return;
+    const autoCompleteMs = Math.max(30000, activeTrip.etaMinutes * 1000);
+    const tComplete = setTimeout(() => {
+      completeActiveTrip(5, 0);
+    }, autoCompleteMs);
+    return () => clearTimeout(tComplete);
+  }, [activeTrip?.id, activeTrip?.status, activeTrip?.etaMinutes]);
+  const showOriginTextPin = !hasRoute && !isCurrentLocationQuery && !!originPreviewCoordinate;
+  const showDestPreviewPin = !hasRoute && !!destinationPreviewCoordinate;
 
   useEffect(() => {
     if (!hasRoute) {
@@ -1146,24 +1586,80 @@ export default function MainScreen() {
     };
   }, [hasRoute, roadRouteCoords]);
 
+  const MAP_ANIMATE_DELTA = { latitudeDelta: 0.022, longitudeDelta: 0.022 };
+
+  useEffect(() => {
+    const map = mapViewRef.current;
+    if (!map) return;
+
+    if (hasRoute && roadRouteCoords.length > 1) {
+      const rafId = requestAnimationFrame(() => {
+        try {
+          map.fitToCoordinates(roadRouteCoords, {
+            edgePadding: { top: 90, right: 44, bottom: 300, left: 44 },
+            animated: true,
+          });
+        } catch {
+          /* fitToCoordinates can throw if coords invalid */
+        }
+      });
+      return () => cancelAnimationFrame(rafId);
+    }
+
+    const target =
+      destinationPreviewCoordinate ??
+      originPreviewCoordinate ??
+      (isCurrentLocationQuery ? userLocation : null) ??
+      userLocation;
+
+    if (!target) return;
+
+    const rafId = requestAnimationFrame(() => {
+      try {
+        map.animateToRegion(
+          {
+            latitude: target.latitude,
+            longitude: target.longitude,
+            ...MAP_ANIMATE_DELTA,
+          },
+          400
+        );
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [
+    destinationPreviewCoordinate?.latitude,
+    destinationPreviewCoordinate?.longitude,
+    originPreviewCoordinate?.latitude,
+    originPreviewCoordinate?.longitude,
+    hasRoute,
+    roadRouteCoords,
+    isCurrentLocationQuery,
+    userLocation?.latitude,
+    userLocation?.longitude,
+  ]);
+
   const fetchPlaceSuggestions = useCallback(
     async (input: string): Promise<SearchSuggestion[]> => {
       const query = input.trim();
       if (!query) return [];
+      if (parseLatLngFromString(query)) return [];
 
       const { key } = resolveGoogleMapsApiKey();
       if (!key) return [];
 
-      const locationBias = userLocation
-        ? `&location=${userLocation.latitude},${userLocation.longitude}&radius=35000`
-        : '';
+      const ksaBias =
+        `&location=${KSA_MAP_CENTER.latitude},${KSA_MAP_CENTER.longitude}` +
+        `&radius=22000&strictbounds=true`;
       const url =
         `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}` +
-        `&key=${key}&language=en&components=country:jm${locationBias}`;
+        `&key=${key}&language=en&components=country:jm${ksaBias}`;
       const res = await fetch(url);
       if (!res.ok) return [];
 
-      const data = (await res.json()) as {
+      let data: {
         status?: string;
         predictions?: Array<{
           place_id?: string;
@@ -1171,6 +1667,11 @@ export default function MainScreen() {
           structured_formatting?: { main_text?: string; secondary_text?: string };
         }>;
       };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        return [];
+      }
       if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') return [];
       const rows = Array.isArray(data.predictions) ? data.predictions : [];
 
@@ -1179,6 +1680,7 @@ export default function MainScreen() {
         const subtitle = p.structured_formatting?.secondary_text?.trim() || p.description?.trim() || '';
         return {
           id: p.place_id || `place-${title}-${i}`,
+          placeId: p.place_id,
           title,
           subtitle,
           icon: 'location',
@@ -1186,7 +1688,7 @@ export default function MainScreen() {
         };
       });
     },
-    [userLocation]
+    []
   );
 
   useEffect(() => {
@@ -1231,10 +1733,10 @@ export default function MainScreen() {
     };
   }, [destinationFocused, destinationQuery, fetchPlaceSuggestions]);
 
-  // Animated drag-to-expand-map
   const panValue = useRef(new Animated.Value(0)).current;
   const minimizedTranslateY = useRef(new Animated.Value(0)).current;
-  const destinationLiftAnim = useRef(new Animated.Value(0)).current;
+  /** 1 = From/Where-to focused — sheet expands to cover the map. */
+  const sheetFocusAnim = useRef(new Animated.Value(0)).current;
   const driverPosAnim = useRef(new Animated.Value(0)).current;
   const driverPosRef = useRef(0);
   const driverRafRef = useRef<number | null>(null);
@@ -1295,11 +1797,22 @@ export default function MainScreen() {
     startDriverRaf();
     return stopDriverRaf;
   }, []);
-  const searchSuggestions: SearchSuggestion[] = [
-    ...(homeAddress ? [{ id: 'saved-home', title: 'Home', subtitle: homeAddress, icon: 'home' as const }] : []),
-    ...(workAddress ? [{ id: 'saved-work', title: 'Work', subtitle: workAddress, icon: 'briefcase' as const }] : []),
-    ...destinationSuggestions,
-  ].filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index);
+  const searchSuggestions: SearchSuggestion[] = useMemo(
+    () =>
+      [
+        ...(homeAddress ? [{ id: 'saved-home', title: 'Home', subtitle: homeAddress, icon: 'home' as const }] : []),
+        ...(workAddress ? [{ id: 'saved-work', title: 'Work', subtitle: workAddress, icon: 'briefcase' as const }] : []),
+        ...destinationSuggestions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          subtitle: s.subtitle,
+          icon: s.icon,
+          fullText: `${s.title}, ${s.subtitle}`,
+          coordinate: s.coordinate,
+        })),
+      ].filter((item, index, arr) => arr.findIndex((candidate) => candidate.id === item.id) === index),
+    [homeAddress, workAddress]
+  );
 
   const fallbackDestinationSuggestions = searchSuggestions
     .filter((item) => {
@@ -1329,27 +1842,31 @@ export default function MainScreen() {
 
   const sheetMinimizeRange = Math.max(SHEET_MINIMIZED_OFFSET, 1);
   /** Sheet up → shorter map; sheet lowered → map uses full window (no dead strip). */
-  const minimizedMapH = minimizedTranslateY.interpolate({
+  /** Map height tracks sheet minimize/expand only. Do not multiply by search-focus — that breaks MapView tiles when the sheet moves. The fullscreen search sheet covers the map instead. */
+  const minimizedMapH = useMemo(
+    () =>
+      minimizedTranslateY.interpolate({
+        inputRange: [0, sheetMinimizeRange],
+        outputRange: [MAP_HEIGHT, SCREEN_HEIGHT],
+        extrapolate: 'clamp',
+      }),
+    [minimizedTranslateY, sheetMinimizeRange]
+  );
+  const sheetTopAnim = sheetFocusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [MAP_HEIGHT - 30, SHEET_FOCUS_TOP],
+  });
+  const sheetMaxHeightAnim = sheetFocusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [BOTTOM_SHEET_HEIGHT, BOTTOM_SHEET_FULLSCREEN_HEIGHT],
+  });
+  const sheetTopRadiusAnim = sheetFocusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [28, 0],
+  });
+  /** Hides the floating app bar when the bottom sheet is dragged down (minimized). */
+  const headerAppBarOpacity = minimizedTranslateY.interpolate({
     inputRange: [0, sheetMinimizeRange],
-    outputRange: [MAP_HEIGHT, SCREEN_HEIGHT],
-    extrapolate: 'clamp',
-  });
-  /** Expand map to full screen while search is focused so it shows behind the sheet */
-  const searchMapExpansion = destinationLiftAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, SCREEN_HEIGHT - MAP_HEIGHT],
-    extrapolate: 'clamp',
-  });
-  const mapHeightAnim = Animated.add(minimizedMapH, searchMapExpansion);
-  /** Clip the sheet height when searching so the map is visible below the search card */
-  const searchSheetMaxHeight = destinationLiftAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [BOTTOM_SHEET_HEIGHT, 420],
-    extrapolate: 'clamp',
-  });
-  /** Fade the sheet panel background out when search is focused so map shows through */
-  const sheetBgOpacity = destinationLiftAnim.interpolate({
-    inputRange: [0, 0.6],
     outputRange: [1, 0],
     extrapolate: 'clamp',
   });
@@ -1369,15 +1886,8 @@ export default function MainScreen() {
     toFocusedRef.current = false;
     setDestinationFocused(false);
     setToFocused(false);
-    setSearchExpanded(false);
     destinationInputRef.current?.blur();
     toInputRef.current?.blur();
-    Animated.spring(destinationLiftAnim, {
-      toValue: 0,
-      useNativeDriver: false,
-      friction: 8,
-      tension: 65,
-    }).start();
   };
 
   const panResponder = useRef(
@@ -1389,12 +1899,8 @@ export default function MainScreen() {
         }
         return scrollOffsetRef.current <= 0 && gs.dy > 8 && Math.abs(gs.dy) > Math.abs(gs.dx);
       },
-      onMoveShouldSetPanResponderCapture: (_, gs) => {
-        if (sheetMinimizedRef.current) {
-          return gs.dy < -8 && Math.abs(gs.dy) > Math.abs(gs.dx);
-        }
-        return scrollOffsetRef.current <= 0 && gs.dy > 8 && Math.abs(gs.dy) > Math.abs(gs.dx);
-      },
+      // Capture must stay false so taps reach Pressables inside the sheet (e.g. place suggestions).
+      onMoveShouldSetPanResponderCapture: () => false,
       onPanResponderMove: (_, gs) => {
         if (sheetMinimizedRef.current) return;
         if (gs.dy > 0) panValue.setValue(gs.dy);
@@ -1415,7 +1921,6 @@ export default function MainScreen() {
           toFocusedRef.current = false;
           toInputRef.current?.blur();
           destinationInputRef.current?.blur();
-          destinationLiftAnim.setValue(0);
           setSheetMinimized(true);
           Animated.spring(minimizedTranslateY, {
             toValue: SHEET_MINIMIZED_OFFSET,
@@ -1435,23 +1940,34 @@ export default function MainScreen() {
     })
   ).current;
 
+  useEffect(() => {
+    const focused = toFocused || destinationFocused;
+    Animated.spring(sheetFocusAnim, {
+      toValue: focused ? 1 : 0,
+      useNativeDriver: false,
+      friction: 9,
+      tension: 70,
+    }).start();
+  }, [toFocused, destinationFocused, sheetFocusAnim]);
+
   const handleDestinationFocus = () => {
     if (sheetMinimized) {
       expandSheetFromMinimized();
     }
+    Animated.spring(panValue, {
+      toValue: 0,
+      useNativeDriver: false,
+      friction: 9,
+      tension: 70,
+    }).start();
     destinationFocusedRef.current = true;
     setDestinationFocused(true);
-    setSearchExpanded(true);
-    Animated.spring(destinationLiftAnim, {
-      toValue: 1,
-      useNativeDriver: false,
-      friction: 8,
-      tension: 65,
-    }).start();
   };
 
   const handleDestinationBlur = () => {
-    setTimeout(() => {
+    if (destinationBlurTimerRef.current) clearTimeout(destinationBlurTimerRef.current);
+    destinationBlurTimerRef.current = setTimeout(() => {
+      destinationBlurTimerRef.current = null;
       destinationFocusedRef.current = false;
       setDestinationFocused(false);
     }, 220);
@@ -1461,713 +1977,324 @@ export default function MainScreen() {
     if (sheetMinimized) {
       expandSheetFromMinimized();
     }
+    Animated.spring(panValue, {
+      toValue: 0,
+      useNativeDriver: false,
+      friction: 9,
+      tension: 70,
+    }).start();
     toFocusedRef.current = true;
     setToFocused(true);
-    setSearchExpanded(true);
-    Animated.spring(destinationLiftAnim, {
-      toValue: 1,
-      useNativeDriver: false,
-      friction: 8,
-      tension: 65,
-    }).start();
   };
 
   const handleToBlur = () => {
-    setTimeout(() => {
+    if (toBlurTimerRef.current) clearTimeout(toBlurTimerRef.current);
+    toBlurTimerRef.current = setTimeout(() => {
+      toBlurTimerRef.current = null;
       toFocusedRef.current = false;
       setToFocused(false);
     }, 220);
   };
 
-  const selectDestination = (value: string) => {
-    setDestinationQuery(value);
-    destinationInputRef.current?.blur();
+  const selectDestination = (item: SearchSuggestion) => {
+    if (destinationBlurTimerRef.current) {
+      clearTimeout(destinationBlurTimerRef.current);
+      destinationBlurTimerRef.current = null;
+    }
+    const v = (item.fullText ?? [item.title, item.subtitle].filter(Boolean).join(', ')).trim();
+    if (v) setDestinationQuery(v);
     destinationFocusedRef.current = false;
     setDestinationFocused(false);
+    destinationInputRef.current?.blur();
+
+    if (item.coordinate && isInJamaicaServiceArea(item.coordinate)) {
+      setDestinationPreviewCoordinate(item.coordinate);
+      return;
+    }
+    const { key } = resolveGoogleMapsApiKey();
+    if (item.placeId && key) {
+      void fetchPlaceDetailsCoordinate(item.placeId, key).then((res) => {
+        if (res.coordinate && isInJamaicaServiceArea(res.coordinate)) {
+          setDestinationPreviewCoordinate(res.coordinate);
+        }
+      });
+    }
   };
 
-  const selectTo = (value: string) => {
-    setToUserEdited(true);
-    setToQuery(value);
-    toInputRef.current?.blur();
+  const selectTo = (item: SearchSuggestion) => {
+    if (toBlurTimerRef.current) {
+      clearTimeout(toBlurTimerRef.current);
+      toBlurTimerRef.current = null;
+    }
+    const v = (item.fullText ?? [item.title, item.subtitle].filter(Boolean).join(', ')).trim();
+    if (v) {
+      setToUserEdited(true);
+      setToQuery(v);
+    }
     toFocusedRef.current = false;
     setToFocused(false);
+    toInputRef.current?.blur();
+
+    if (item.coordinate && isInJamaicaServiceArea(item.coordinate)) {
+      setOriginPreviewCoordinate(item.coordinate);
+      return;
+    }
+    const { key } = resolveGoogleMapsApiKey();
+    if (item.placeId && key) {
+      void fetchPlaceDetailsCoordinate(item.placeId, key).then((res) => {
+        if (res.coordinate && isInJamaicaServiceArea(res.coordinate)) {
+          setOriginPreviewCoordinate(res.coordinate);
+        }
+      });
+    }
   };
 
-  const searchSheetTranslateY = destinationLiftAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -(MAP_HEIGHT - 128)],
-  });
+  const applyMapLocationAsFrom = (label: string) => {
+    const coord = mapLocationActionRef.current?.coordinate;
+    setToUserEdited(true);
+    setToQuery(label);
+    if (coord && isInJamaicaServiceArea(coord)) {
+      setOriginPreviewCoordinate(coord);
+    }
+    setMapLocationAction(null);
+  };
 
-  // ── Profile (read-only) ─────────────────────────────────────────
+  const applyMapLocationAsTo = (label: string) => {
+    const coord = mapLocationActionRef.current?.coordinate;
+    setDestinationQuery(label);
+    if (coord && isInJamaicaServiceArea(coord)) {
+      setDestinationPreviewCoordinate(coord);
+    }
+    setMapLocationAction(null);
+  };
+
+  applyMapFromRef.current = applyMapLocationAsFrom;
+  applyMapToRef.current = applyMapLocationAsTo;
+
+  const mapRadialPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => mapLocationActionRef.current !== null,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (e) => {
+          const a = mapLocationActionRef.current?.anchorScreen;
+          if (!a) {
+            mapRadialStartNearAnchor.current = false;
+            return;
+          }
+          const { pageX, pageY } = e.nativeEvent;
+          mapRadialStartNearAnchor.current =
+            Math.hypot(pageX - a.x, pageY - a.y) < MAP_RADIAL_DRAG_ANCHOR_RADIUS;
+        },
+        onPanResponderMove: (_, g) => {
+          if (!mapRadialStartNearAnchor.current) return;
+          if (Math.hypot(g.dx, g.dy) >= MAP_RADIAL_REVEAL_DISTANCE) {
+            setMapLocationAction((prev) =>
+              prev && !prev.radialRevealed ? { ...prev, radialRevealed: true } : prev
+            );
+          }
+        },
+        onPanResponderRelease: (e) => {
+          const prev = mapLocationActionRef.current;
+          if (!prev?.anchorScreen) return;
+          const { pageX, pageY } = e.nativeEvent;
+          // Before icons are shown, a tap away from the pin dismisses. After they are shown, taps on
+          // From/To start far from the pin — do not require "start near anchor" or a tap would dismiss.
+          if (!mapRadialStartNearAnchor.current && !prev.radialRevealed) {
+            setMapLocationAction(null);
+            return;
+          }
+          if (prev.resolving) {
+            mapRadialStartNearAnchor.current = false;
+            return;
+          }
+          const { fromCenter, toCenter } = getRadialFabCenters(prev.anchorScreen);
+          const hitR = MAP_RADIAL_BTN / 2 + MAP_RADIAL_HIT_EXTRA;
+          if (prev.radialRevealed) {
+            if (Math.hypot(pageX - fromCenter.x, pageY - fromCenter.y) <= hitR) {
+              applyMapFromRef.current(prev.label);
+              mapRadialStartNearAnchor.current = false;
+              return;
+            }
+            if (Math.hypot(pageX - toCenter.x, pageY - toCenter.y) <= hitR) {
+              applyMapToRef.current(prev.label);
+              mapRadialStartNearAnchor.current = false;
+              return;
+            }
+          }
+          setMapLocationAction(null);
+          mapRadialStartNearAnchor.current = false;
+        },
+      }),
+    []
+  );
+
+  // ── Profile & settings sub-screens (see profile/, settings/) ─────
   if (screen === 'profile') {
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.screenBg, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Profile</Text>
-          <Pressable style={styles.editProfileHeaderSide} onPress={openProfileEdit} hitSlop={8}>
-            <Ionicons name="pencil" size={22} color={ui.text} />
-          </Pressable>
-        </View>
-
-        <ScrollView
-          style={styles.editProfileScroll}
-          contentContainerStyle={styles.profileViewScrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.editProfileAvatarWrap}>
-            <View style={[styles.editProfileAvatarImage, { backgroundColor: ui.softBg }]}>
-              <Ionicons name="person" size={56} color={ui.textMuted} />
-            </View>
-          </View>
-
-          <View style={styles.profileViewSectionHeadingWrap}>
-            <Text style={[styles.profileViewSectionTitle, { color: ui.text }]}>Personal information</Text>
-          </View>
-          <View style={[styles.profileViewCard, { backgroundColor: ui.cardBg }]}>
-            <View style={styles.profileViewRow}>
-              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>First name</Text>
-              <Text style={[styles.profileViewValue, { color: ui.text }]}>{userFirstName.trim() ? userFirstName : '—'}</Text>
-            </View>
-            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
-            <View style={styles.profileViewRow}>
-              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Last name</Text>
-              <Text style={[styles.profileViewValue, { color: ui.text }]}>{userLastName.trim() ? userLastName : '—'}</Text>
-            </View>
-            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
-            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
-              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Email</Text>
-              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={4}>
-                {userEmail.trim() ? userEmail : '—'}
-              </Text>
-            </View>
-            <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} />
-            <View style={[styles.profileViewRow, styles.profileViewRowTop]}>
-              <Text style={[styles.profileViewLabel, { color: ui.textMuted }]}>Phone</Text>
-              <Text style={[styles.profileViewValue, styles.profileViewValueMultiline, { color: ui.text }]} numberOfLines={3}>
-                {userPhoneE164 ? formatE164International(userPhoneE164) : '—'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.profilePaymentSectionHeader}>
-            <Text style={[styles.profileViewSectionTitle, styles.profileViewSectionTitleFlex, { color: ui.text }]}>Payment methods</Text>
-            <Pressable
-              style={styles.profileAddCardIconBtn}
-              onPress={() => {
-                setNewCardNumber('');
-                setNewCardName('');
-                setNewCardExpiry('');
-                setNewCardCvv('');
-                setAddCardVisible(true);
-              }}
-              hitSlop={8}
-              accessibilityLabel="Add card"
-            >
-              <Ionicons name="add" size={20} color={ui.text} />
-            </Pressable>
-          </View>
-          <View style={[styles.profileViewCard, { backgroundColor: ui.cardBg }]}>
-            {cards.map((card, i) => (
-              <View key={card.id}>
-                <Pressable
-                  style={styles.profilePaymentRow}
-                  onPress={() => {
-                    setDefaultCard(card.id);
-                    void AsyncStorage.setItem('profile_default_card', card.id);
-                  }}
-                >
-                  <View style={[styles.profilePaymentCardIcon, card.type === 'visa' ? styles.profilePaymentVisa : styles.profilePaymentMc]}>
-                    <Text style={styles.profilePaymentCardIconText}>{card.type === 'visa' ? 'VISA' : 'MC'}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.profilePaymentLabel, { color: ui.text }]}>{card.label}</Text>
-                    <Text style={[styles.profilePaymentSub, { color: ui.textMuted }]}>•••• {card.last4}</Text>
-                  </View>
-                  {defaultCard === card.id && (
-                    <View style={styles.profilePaymentDefaultBadge}>
-                      <Text style={styles.profilePaymentDefaultText}>Default</Text>
-                    </View>
-                  )}
-                  <Ionicons
-                    name={defaultCard === card.id ? 'radio-button-on' : 'radio-button-off'}
-                    size={22}
-                    color={defaultCard === card.id ? '#ffd54a' : ui.textMuted}
-                  />
-                </Pressable>
-                {i < cards.length - 1 ? <View style={[styles.profileViewDivider, { backgroundColor: ui.divider }]} /> : null}
-              </View>
-            ))}
-          </View>
-
-          <Pressable
-            style={[
-              styles.signOutButton,
-              { backgroundColor: isDark ? '#7f1d1d' : '#fee2e2', borderColor: isDark ? '#b91c1c' : '#ef4444' },
-            ]}
-            onPress={onConfirmSignOut}
-          >
-            <Text style={[styles.signOutButtonText, { color: isDark ? '#fecaca' : '#b91c1c' }]}>Sign out</Text>
-          </Pressable>
-        </ScrollView>
-
-        <Modal visible={addCardVisible} animationType="slide" transparent statusBarTranslucent>
-          <KeyboardAvoidingView
-            style={styles.addCardKb}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          >
-            <View style={styles.modalOverlay}>
-              <Pressable style={StyleSheet.absoluteFillObject} onPress={closeAddCardSheet} />
-              <ScrollView
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.addCardScrollContent}
-              >
-                <View style={styles.addCardSheet}>
-                  <View style={styles.modalHandle} />
-                  <View style={styles.addCardPreview}>
-                    <Image
-                      source={addCardPreviewAsset}
-                      style={styles.addCardPreviewImage}
-                      resizeMode="contain"
-                    />
-                  </View>
-                  <Text style={styles.modalTitle}>Add card</Text>
-                  <Text style={styles.modalLabel}>Card number</Text>
-                  <TextInput
-                    style={styles.modalInput}
-                    value={newCardNumber}
-                    onChangeText={setNewCardNumber}
-                    placeholder="1234 5678 9012 3456"
-                    placeholderTextColor="#aaa"
-                    keyboardType="number-pad"
-                    autoComplete="cc-number"
-                  />
-                  <Text style={styles.modalLabel}>Name on card</Text>
-                  <TextInput
-                    style={styles.modalInput}
-                    value={newCardName}
-                    onChangeText={setNewCardName}
-                    placeholder="As printed on card"
-                    placeholderTextColor="#aaa"
-                    autoCapitalize="characters"
-                  />
-                  <View style={styles.addCardRow}>
-                    <View style={styles.addCardRowField}>
-                      <Text style={styles.modalLabel}>Expiry</Text>
-                      <TextInput
-                        style={styles.modalInput}
-                        value={newCardExpiry}
-                        onChangeText={setNewCardExpiry}
-                        placeholder="MM/YY"
-                        placeholderTextColor="#aaa"
-                        keyboardType="numbers-and-punctuation"
-                        maxLength={5}
-                      />
-                    </View>
-                    <View style={styles.addCardRowField}>
-                      <Text style={styles.modalLabel}>CVV</Text>
-                      <TextInput
-                        style={styles.modalInput}
-                        value={newCardCvv}
-                        onChangeText={setNewCardCvv}
-                        placeholder="•••"
-                        placeholderTextColor="#aaa"
-                        keyboardType="number-pad"
-                        maxLength={4}
-                        secureTextEntry
-                      />
-                    </View>
-                  </View>
-                  <Pressable style={styles.modalSaveBtn} onPress={() => { void saveNewCard(); }}>
-                    <Text style={styles.modalSaveBtnText}>Add card</Text>
-                  </Pressable>
-                  <Pressable style={styles.modalCancelBtn} onPress={closeAddCardSheet}>
-                    <Text style={styles.modalCancelBtnText}>Cancel</Text>
-                  </Pressable>
-                </View>
-              </ScrollView>
-            </View>
-          </KeyboardAvoidingView>
-        </Modal>
-      </View>
+      <ProfileScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('home')}
+        onEdit={openProfileEdit}
+        userFirstName={userFirstName}
+        userLastName={userLastName}
+        userEmail={userEmail}
+        userPhoneE164={userPhoneE164}
+        cards={cards}
+        defaultCard={defaultCard}
+        setDefaultCard={setDefaultCard}
+        addCardVisible={addCardVisible}
+        setAddCardVisible={setAddCardVisible}
+        newCardNumber={newCardNumber}
+        setNewCardNumber={setNewCardNumber}
+        newCardName={newCardName}
+        setNewCardName={setNewCardName}
+        newCardExpiry={newCardExpiry}
+        setNewCardExpiry={setNewCardExpiry}
+        newCardCvv={newCardCvv}
+        setNewCardCvv={setNewCardCvv}
+        closeAddCardSheet={closeAddCardSheet}
+        saveNewCard={saveNewCard}
+        onConfirmSignOut={onConfirmSignOut}
+      />
     );
   }
 
-  // ── Edit Profile ────────────────────────────────────────────────
   if (screen === 'profileEdit') {
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.screenBg, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('profile')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Edit Profile</Text>
-          <Pressable
-            style={styles.editProfileHeaderSide}
-            onPress={() => { void saveProfile(); }}
-            hitSlop={8}
-          >
-            <Ionicons
-              name="checkmark"
-              size={28}
-              color={profileDirty ? '#22c55e' : '#c8c8c8'}
-            />
-          </Pressable>
-        </View>
-
-        <ScrollView
-          style={styles.editProfileScroll}
-          contentContainerStyle={styles.editProfileScrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.editProfileAvatarWrap}>
-            <View style={[styles.editProfileAvatarImage, { backgroundColor: ui.softBg }]}>
-              <Ionicons name="person" size={56} color={ui.textMuted} />
-            </View>
-            <Pressable style={[styles.editProfileAvatarCamera, { backgroundColor: ui.cardBg }]} hitSlop={6}>
-              <Ionicons name="camera" size={18} color={ui.text} />
-            </Pressable>
-          </View>
-
-          <View style={styles.editProfileField}>
-            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>First name</Text>
-            <TextInput
-              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
-              value={editingFirstName}
-              onChangeText={setEditingFirstName}
-              placeholder="Charlotte"
-              placeholderTextColor={ui.placeholder}
-              autoCapitalize="words"
-            />
-          </View>
-
-          <View style={styles.editProfileField}>
-            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Last name</Text>
-            <TextInput
-              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
-              value={editingLastName}
-              onChangeText={setEditingLastName}
-              placeholder="King"
-              placeholderTextColor={ui.placeholder}
-              autoCapitalize="words"
-            />
-          </View>
-
-          <View style={styles.editProfileField}>
-            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>E mail address</Text>
-            <TextInput
-              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
-              value={editingEmail}
-              onChangeText={setEditingEmail}
-              placeholder="johnkinggraphics@gmail.com"
-              placeholderTextColor={ui.placeholder}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-
-          <View style={styles.editProfileField}>
-            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>User name</Text>
-            <TextInput
-              style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
-              value={editingUsername}
-              onChangeText={setEditingUsername}
-              placeholder="@johnkinggraphics"
-              placeholderTextColor={ui.placeholder}
-              autoCapitalize="none"
-            />
-          </View>
-
-          <View style={styles.editProfileField}>
-            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Password</Text>
-            <View style={[styles.editProfilePasswordRow, { backgroundColor: ui.softBg }]}>
-              <TextInput
-                style={[styles.editProfileInput, styles.editProfilePasswordInput, { backgroundColor: 'transparent', color: ui.text }]}
-                value={editingPassword}
-                onChangeText={setEditingPassword}
-                placeholder="••••••••••"
-                placeholderTextColor={ui.placeholder}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-              />
-              <Pressable style={styles.editProfileEyeBtn} onPress={() => setShowPassword(v => !v)} hitSlop={8}>
-                <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={22} color={ui.text} />
-              </Pressable>
-            </View>
-          </View>
-
-          <View style={styles.editProfileField}>
-            <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Phone number</Text>
-            <View style={styles.editProfilePhoneRow}>
-              <Pressable style={[styles.editProfileCountryBtn, { backgroundColor: ui.softBg }]} onPress={() => setCountryPickerVisible(true)}>
-                <Text style={[styles.editProfileCountryText, { color: ui.text }]}>{countryCode}</Text>
-                <Ionicons name="chevron-down" size={16} color={ui.text} />
-              </Pressable>
-              <TextInput
-                style={[styles.editProfileInput, styles.editProfilePhoneInput, { backgroundColor: ui.softBg, color: ui.text }]}
-                value={editingPhone}
-                onChangeText={setEditingPhone}
-                placeholder="6895312"
-                placeholderTextColor={ui.placeholder}
-                keyboardType="phone-pad"
-              />
-            </View>
-            <Text style={[styles.editProfileHint, { color: ui.textMuted }]}>
-              Valid mobile or landline for your country. Saved as E.164. Each number can only be linked once on this device.
-            </Text>
-          </View>
-        </ScrollView>
-
-        <Modal visible={countryPickerVisible} animationType="fade" transparent statusBarTranslucent>
-          <View style={styles.editProfilePickerOverlay}>
-            <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setCountryPickerVisible(false)} />
-            <View style={[styles.editProfilePickerSheet, { backgroundColor: ui.cardBg }]}>
-              <Text style={[styles.editProfilePickerTitle, { color: ui.text }]}>Country code</Text>
-              {countryCodes.map(({ code, label }) => (
-                <Pressable
-                  key={code}
-                  style={[styles.editProfilePickerRow, { borderBottomColor: ui.divider }]}
-                  onPress={() => { setCountryCode(code); setCountryPickerVisible(false); }}
-                >
-                  <Text style={[styles.editProfilePickerCode, { color: ui.text }]}>{code}</Text>
-                  <Text style={[styles.editProfilePickerLabel, { color: ui.textMuted }]}>{label}</Text>
-                  {countryCode === code ? <Ionicons name="checkmark" size={20} color="#22c55e" /> : <View style={{ width: 20 }} />}
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        </Modal>
-
-        <Modal visible={addressModal !== null} animationType="slide" transparent statusBarTranslucent>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalSheet}>
-              <View style={styles.modalHandle} />
-              <Text style={styles.modalTitle}>
-                {addressModal === 'home' ? 'Home Address' : 'Work Address'}
-              </Text>
-              <TextInput
-                style={styles.modalInput}
-                value={addressInput}
-                onChangeText={setAddressInput}
-                placeholder={addressModal === 'home' ? 'e.g. 12 Constant Spring Rd' : 'e.g. 6 Ocean Blvd, Kingston'}
-                placeholderTextColor="#aaa"
-                autoCapitalize="words"
-                autoFocus
-              />
-              <Pressable style={styles.modalSaveBtn} onPress={saveAddress}>
-                <Text style={styles.modalSaveBtnText}>Save Address</Text>
-              </Pressable>
-              <Pressable style={styles.modalCancelBtn} onPress={() => { setAddressModal(null); setAddressInput(''); }}>
-                <Text style={styles.modalCancelBtnText}>Cancel</Text>
-              </Pressable>
-            </View>
-          </View>
-        </Modal>
-      </View>
+      <ProfileEditScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('profile')}
+        onSave={saveProfile}
+        profileDirty={profileDirty}
+        editingFirstName={editingFirstName}
+        setEditingFirstName={setEditingFirstName}
+        editingLastName={editingLastName}
+        setEditingLastName={setEditingLastName}
+        editingEmail={editingEmail}
+        setEditingEmail={setEditingEmail}
+        editingUsername={editingUsername}
+        setEditingUsername={setEditingUsername}
+        editingPassword={editingPassword}
+        setEditingPassword={setEditingPassword}
+        showPassword={showPassword}
+        setShowPassword={setShowPassword}
+        editingPhone={editingPhone}
+        setEditingPhone={setEditingPhone}
+        countryCode={countryCode}
+        setCountryCode={setCountryCode}
+        countryPickerVisible={countryPickerVisible}
+        setCountryPickerVisible={setCountryPickerVisible}
+        addressModal={addressModal}
+        addressInput={addressInput}
+        setAddressInput={setAddressInput}
+        saveAddress={saveAddress}
+        closeAddressModal={() => { setAddressModal(null); setAddressInput(''); }}
+      />
     );
   }
-
-  // ── Settings sub-screens ─────────────────────────────────────────
 
   if (screen === 'settingsNotifications') {
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Notifications</Text>
-          <View style={styles.editProfileHeaderSide} />
-        </View>
-        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
-
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Trips</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Ride updates</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Status changes & driver info</Text>
-              </View>
-              <Switch value={notifRideUpdates} onValueChange={setNotifRideUpdates} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Driver arrival</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Alert when your driver is nearby</Text>
-              </View>
-              <Switch value={notifDriverArrival} onValueChange={setNotifDriverArrival} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Trip receipts</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Email & in-app receipt after each trip</Text>
-              </View>
-              <Switch value={notifTripReceipt} onValueChange={setNotifTripReceipt} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-          </View>
-
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Promotions</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Deals & offers</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Discounts and promo codes</Text>
-              </View>
-              <Switch value={notifPromos} onValueChange={setNotifPromos} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>New features</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Product updates and announcements</Text>
-              </View>
-              <Switch value={notifNewFeatures} onValueChange={setNotifNewFeatures} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Surveys & feedback</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Help us improve Ridr</Text>
-              </View>
-              <Switch value={notifSurveys} onValueChange={setNotifSurveys} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-          </View>
-
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Account</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Security alerts</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Sign-ins and password changes</Text>
-              </View>
-              <Switch value={notifSecurity} onValueChange={setNotifSecurity} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-            <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-            <View style={styles.notifRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.notifRowLabel, { color: ui.text }]}>Payment activity</Text>
-                <Text style={[styles.notifRowSub, { color: ui.textMuted }]}>Charges, refunds & payment issues</Text>
-              </View>
-              <Switch value={notifPayments} onValueChange={setNotifPayments} trackColor={{ true: isDark ? '#ffffff' : '#171717', false: ui.softBg }} thumbColor={isDark ? '#171717' : '#fff'} />
-            </View>
-          </View>
-
-        </ScrollView>
-      </View>
+      <SettingsNotificationsScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('home')}
+        notifRideUpdates={notifRideUpdates}
+        setNotifRideUpdates={setNotifRideUpdates}
+        notifDriverArrival={notifDriverArrival}
+        setNotifDriverArrival={setNotifDriverArrival}
+        notifTripReceipt={notifTripReceipt}
+        setNotifTripReceipt={setNotifTripReceipt}
+        notifPromos={notifPromos}
+        setNotifPromos={setNotifPromos}
+        notifNewFeatures={notifNewFeatures}
+        setNotifNewFeatures={setNotifNewFeatures}
+        notifSurveys={notifSurveys}
+        setNotifSurveys={setNotifSurveys}
+        notifSecurity={notifSecurity}
+        setNotifSecurity={setNotifSecurity}
+        notifPayments={notifPayments}
+        setNotifPayments={setNotifPayments}
+      />
     );
   }
 
   if (screen === 'settingsPassword') {
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Change Password</Text>
-          <View style={styles.editProfileHeaderSide} />
-        </View>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, marginTop: 20, padding: 16, gap: 12 }]}>
-              <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>New password</Text>
-              <TextInput
-                style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
-                value={newPassword}
-                onChangeText={setNewPassword}
-                placeholder="At least 6 characters"
-                placeholderTextColor={ui.placeholder}
-                secureTextEntry
-                autoComplete="password-new"
-              />
-              <Text style={[styles.editProfileLabel, { color: ui.textMuted }]}>Confirm password</Text>
-              <TextInput
-                style={[styles.editProfileInput, { backgroundColor: ui.softBg, color: ui.text }]}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                placeholder="Repeat new password"
-                placeholderTextColor={ui.placeholder}
-                secureTextEntry
-              />
-            </View>
-            <Pressable
-              style={[styles.modalSaveBtn, { marginTop: 24, backgroundColor: ui.text }]}
-              onPress={() => {
-                if (!newPassword || newPassword.length < 6) { Alert.alert('Password', 'Use at least 6 characters.'); return; }
-                if (newPassword !== confirmPassword) { Alert.alert('Password', 'Passwords do not match.'); return; }
-                Alert.alert('Password', 'Password updated successfully.');
-                setNewPassword('');
-                setConfirmPassword('');
-                setScreen('home');
-              }}
-            >
-              <Text style={[styles.modalSaveBtnText, { color: ui.screenBg }]}>Update Password</Text>
-            </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </View>
+      <SettingsPasswordScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('home')}
+        onUpdated={() => setScreen('home')}
+        newPassword={newPassword}
+        setNewPassword={setNewPassword}
+        confirmPassword={confirmPassword}
+        setConfirmPassword={setConfirmPassword}
+      />
     );
   }
 
   if (screen === 'settingsLanguage') {
-    const langs = ['English', 'Spanish', 'French', 'Patois'];
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Language</Text>
-          <View style={styles.editProfileHeaderSide} />
-        </View>
-        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, marginTop: 20 }]}>
-            {langs.map((lang, i) => (
-              <View key={lang}>
-                <Pressable
-                  style={[styles.settingsRow, { paddingVertical: 16 }]}
-                  onPress={() => { setSelectedLang(lang); setScreen('home'); }}
-                >
-                  <Text style={[styles.settingsRowLabel, { color: ui.text }]}>{lang}</Text>
-                  {selectedLang === lang
-                    ? <Ionicons name="checkmark-circle" size={22} color={ui.ctaBg} />
-                    : <Ionicons name="ellipse-outline" size={22} color={ui.textMuted} />}
-                </Pressable>
-                {i < langs.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </View>
+      <SettingsLanguageScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('home')}
+        selectedLang={selectedLang}
+        onSelectLang={(lang) => { setSelectedLang(lang); setScreen('home'); }}
+      />
     );
   }
 
   if (screen === 'settingsAppearance') {
-    const options: Array<{ label: string; value: import('../../theme/ThemeProvider').ThemeOverride; icon: string }> = [
-      { label: 'System default', value: 'system', icon: 'phone-portrait-outline' },
-      { label: 'Light', value: 'light', icon: 'sunny-outline' },
-      { label: 'Dark', value: 'dark', icon: 'moon-outline' },
-    ];
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Appearance</Text>
-          <View style={styles.editProfileHeaderSide} />
-        </View>
-        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Theme</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-            {options.map((opt, i) => (
-              <View key={opt.value}>
-                <Pressable
-                  style={[styles.settingsRow, { paddingVertical: 16 }]}
-                  onPress={() => setThemeOverride(opt.value)}
-                >
-                  <Ionicons name={opt.icon as never} size={20} color={ui.text} />
-                  <Text style={[styles.settingsRowLabel, { color: ui.text }]}>{opt.label}</Text>
-                  {themeOverride === opt.value
-                    ? <Ionicons name="checkmark-circle" size={22} color={ui.ctaBg} />
-                    : <Ionicons name="ellipse-outline" size={22} color={ui.textMuted} />}
-                </Pressable>
-                {i < options.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </View>
+      <SettingsAppearanceScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('home')}
+        themeOverride={themeOverride}
+        setThemeOverride={setThemeOverride}
+      />
     );
   }
 
   if (screen === 'settingsHelp') {
-    const faqs = [
-      'How do I book a ride?',
-      'How do I cancel a trip?',
-      'How do I update my payment method?',
-      'I have a complaint about a driver.',
-    ];
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Help Centre</Text>
-          <View style={styles.editProfileHeaderSide} />
-        </View>
-        <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Frequently asked questions</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-            {faqs.map((q, i) => (
-              <View key={q}>
-                <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => Alert.alert('Help', q)}>
-                  <Ionicons name="chatbubble-outline" size={20} color={ui.text} />
-                  <Text style={[styles.settingsRowLabel, { color: ui.text, fontWeight: '500' }]}>{q}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-                </Pressable>
-                {i < faqs.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
-              </View>
-            ))}
-          </View>
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Still need help?</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-            <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => setScreen('settingsSupport')}>
-              <Ionicons name="headset-outline" size={20} color={ui.text} />
-              <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Contact Support</Text>
-              <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-            </Pressable>
-          </View>
-        </ScrollView>
-      </View>
+      <SettingsHelpScreen
+        ui={ui}
+        isDark={isDark}
+        onBack={() => setScreen('home')}
+        onContactSupport={() => setScreen('settingsSupport')}
+      />
     );
   }
 
   if (screen === 'settingsSupport') {
-    return <SupportTicketScreen ui={ui} isDark={isDark} userEmail={userEmail} userFirstName={userFirstName} onBack={() => setScreen('home')} />;
+    return (
+      <SettingsSupportScreen
+        userEmail={userEmail}
+        userFirstName={userFirstName}
+        onBack={() => setScreen('home')}
+      />
+    );
   }
 
   if (screen === 'settingsTerms') {
+    return <SettingsTermsScreen ui={ui} isDark={isDark} onBack={() => setScreen('home')} />;
+  }
+
+  if (screen === 'activeRide' && presentRide) {
     return (
-      <View style={[styles.editProfileRoot, { backgroundColor: ui.screenBg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <View style={[styles.editProfileHeader, { backgroundColor: ui.panelBg, borderBottomWidth: 1, borderBottomColor: ui.divider }]}>
-          <Pressable style={styles.editProfileHeaderSide} onPress={() => setScreen('home')} hitSlop={8}>
-            <Ionicons name="arrow-back" size={24} color={ui.text} />
-          </Pressable>
-          <Text style={[styles.editProfileHeaderTitle, { color: ui.text }]}>Terms & Privacy</Text>
-          <View style={styles.editProfileHeaderSide} />
-        </View>
-        <ScrollView style={styles.editProfileScroll} contentContainerStyle={[styles.editProfileScrollContent, { paddingTop: 20 }]} showsVerticalScrollIndicator={false}>
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Terms of Service</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, padding: 16 }]}>
-            <Text style={[styles.notifRowSub, { color: ui.text, lineHeight: 22 }]}>
-              {`By using Ridr, you agree to our Terms of Service. We collect location data to provide ride services and improve the app experience.\n\nRidr reserves the right to update these terms. Continued use of the app constitutes acceptance of any changes.`}
-            </Text>
-          </View>
-          <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>Privacy Policy</Text>
-          <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider, padding: 16 }]}>
-            <Text style={[styles.notifRowSub, { color: ui.text, lineHeight: 22 }]}>
-              {`Your personal data is never sold to third parties. You may request deletion of your data at any time by contacting support@ridr.app.`}
-            </Text>
-          </View>
-        </ScrollView>
-      </View>
+      <ActiveRideScreen
+        trip={presentRide}
+        ui={ui}
+        isDark={isDark}
+        onEndTrip={leaveActiveRideScreen}
+      />
     );
   }
 
@@ -2177,19 +2304,82 @@ export default function MainScreen() {
       <View key={ANIMATION_TREE_KEY} style={[styles.safeArea, { backgroundColor: ui.screenBg }]}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} translucent={Platform.OS === 'android'} />
 
-      {/* Map: short when sheet is up, full screen when sheet is lowered */}
-      <Animated.View style={[styles.mapWrapper, { height: mapHeightAnim }]}>
+      <FindingDriverModal
+        visible={findingDriverVisible}
+        phase={findingDriverPhase}
+        ui={ui}
+        isDark={isDark}
+        fromLabel={toQuery.trim()}
+        toLabel={destinationQuery.trim()}
+        fareFormatted={rideFareLabel}
+        etaLabel={rideEtaLabel}
+        paymentLabel={selectedPaymentLabel}
+        onChangePayment={setSelectedPaymentLabel}
+        onClose={closeFindingDriver}
+        onSwipeConfirm={confirmRideRequest}
+        onRetry={retryFindingDriver}
+      />
+
+      {/* Map: short when sheet is up, full window when sheet is minimized */}
+      <Animated.View style={[styles.mapWrapper, { height: minimizedMapH }]}>
+        <View ref={mapMeasureRef} style={StyleSheet.absoluteFillObject} collapsable={false}>
         <MapView
+          ref={mapViewRef}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           style={StyleSheet.absoluteFillObject}
           onPress={() => {
-            if (searchExpanded) {
+            setMapLocationAction(null);
+            if (destinationFocused || toFocused) {
               collapseSearchMode();
             }
           }}
-          region={{
-            latitude: mapCenter.latitude,
-            longitude: mapCenter.longitude,
+          onLongPress={async (e) => {
+            const coordinate = e.nativeEvent.coordinate;
+            if (!isInJamaicaServiceArea(coordinate)) {
+              Alert.alert(
+                'Outside service area',
+                'Ridr serves Jamaica. Long-press the map within Jamaica to set a location.'
+              );
+              return;
+            }
+            const { key: mapsApiKey } = resolveGoogleMapsApiKey();
+            let anchorScreen: { x: number; y: number } | null = null;
+            try {
+              const map = mapViewRef.current;
+              const shell = mapMeasureRef.current;
+              if (map && shell) {
+                const pt = await map.pointForCoordinate(coordinate);
+                anchorScreen = await new Promise<{ x: number; y: number }>((resolve) => {
+                  shell.measureInWindow((x: number, y: number) => {
+                    resolve({ x: x + pt.x, y: y + pt.y });
+                  });
+                });
+              }
+            } catch {
+              anchorScreen = { x: SCREEN_WIDTH * 0.52, y: SCREEN_HEIGHT * 0.34 };
+            }
+            if (!anchorScreen) {
+              anchorScreen = { x: SCREEN_WIDTH * 0.52, y: SCREEN_HEIGHT * 0.34 };
+            }
+            setMapLocationAction({
+              coordinate,
+              label: '',
+              resolving: true,
+              radialRevealed: false,
+              anchorScreen,
+            });
+            const label = await reverseGeocodeMapPin(coordinate, mapsApiKey);
+            setMapLocationAction((prev) =>
+              prev &&
+              prev.coordinate.latitude === coordinate.latitude &&
+              prev.coordinate.longitude === coordinate.longitude
+                ? { ...prev, label, resolving: false, radialRevealed: true }
+                : prev
+            );
+          }}
+          initialRegion={{
+            latitude: JAMAICA_KINGSTON.latitude,
+            longitude: JAMAICA_KINGSTON.longitude,
             latitudeDelta: 0.018,
             longitudeDelta: 0.018,
           }}
@@ -2230,99 +2420,35 @@ export default function MainScreen() {
                 </Marker>
               ) : null}
             </>
-          ) : showPickupPoint ? (
-            <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.mapMarkerPickup} />
-            </Marker>
-          ) : showDestinationOnlyPoint ? (
-            <Marker coordinate={destinationPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.mapMarkerDropoff} />
-            </Marker>
-          ) : null}
-        </MapView>
-        <Pressable
-          style={styles.mapExpandBtn}
-          onPress={() => {
-            if (sheetMinimized) {
-              expandSheetFromMinimized();
-            } else {
-              setMapExpanded(true);
-            }
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={sheetMinimized ? 'Show bottom sheet' : 'Full screen map'}
-        >
-          <Ionicons name={sheetMinimized ? 'chevron-up' : 'expand'} size={16} color="#ffffff" />
-        </Pressable>
-      </Animated.View>
-
-      {/* Full-screen map modal */}
-      <Modal visible={mapExpanded} animationType="fade" statusBarTranslucent>
-        <View style={styles.expandedMapWrap}>
-          <MapView
-            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-            style={StyleSheet.absoluteFillObject}
-            region={{
-              latitude: mapCenter.latitude,
-              longitude: mapCenter.longitude,
-              latitudeDelta: 0.018,
-              longitudeDelta: 0.018,
-            }}
-            showsUserLocation={false}
-            showsMyLocationButton={false}
-            showsCompass={true}
-            toolbarEnabled={false}
-            rotateEnabled={true}
-            pitchEnabled={true}
-          >
-            {hasRoute ? (
-              <>
-                <Polyline
-                  coordinates={roadRouteCoords}
-                  strokeColor="rgba(255,255,255,0.95)"
-                  strokeWidth={9}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-                <Polyline
-                  coordinates={roadRouteCoords}
-                  strokeColor="#171717"
-                  strokeWidth={6}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-                <Marker coordinate={pickupCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
+          ) : (
+            <>
+              {showCurrentLocationPin ? (
+                <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
                   <View style={styles.mapMarkerPickup} />
                 </Marker>
-                <Marker coordinate={dropoffCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
+              ) : null}
+              {showOriginTextPin ? (
+                <Marker coordinate={originPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={styles.mapMarkerPickup} />
+                </Marker>
+              ) : null}
+              {showDestPreviewPin ? (
+                <Marker coordinate={destinationPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
                   <View style={styles.mapMarkerDropoff} />
                 </Marker>
-                {routeAnimatorPoint ? (
-                  <Marker coordinate={routeAnimatorPoint} anchor={{ x: 0.5, y: 0.5 }}>
-                    <View style={styles.routeAnimatorOuter}>
-                      <View style={styles.routeAnimatorInner} />
-                    </View>
-                  </Marker>
-                ) : null}
-              </>
-            ) : showPickupPoint ? (
-              <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={styles.mapMarkerPickup} />
-              </Marker>
-            ) : showDestinationOnlyPoint ? (
-              <Marker coordinate={destinationPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={styles.mapMarkerDropoff} />
-              </Marker>
-            ) : null}
-          </MapView>
-          <Pressable style={styles.mapCollapseBtn} onPress={() => setMapExpanded(false)}>
-            <Ionicons name="contract" size={18} color="#ffffff" />
-          </Pressable>
+              ) : null}
+            </>
+          )}
+        </MapView>
         </View>
-      </Modal>
+      </Animated.View>
 
-      {/* Header — floats over map, fades out when searching */}
-      {activeTab === 'home' ? <Animated.View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay, opacity: sheetBgOpacity }]} pointerEvents={searchExpanded ? 'none' : 'auto'}>
+      {/* Header — floats over map; hides when bottom sheet is minimized (home only); hidden while search fields are focused */}
+      {activeTab === 'home' && !toFocused && !destinationFocused ? (
+      <Animated.View
+        style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay, opacity: headerAppBarOpacity }]}
+        pointerEvents={sheetMinimized ? 'none' : 'auto'}
+      >
         <View style={styles.headerRow}>
           <View style={styles.profileBlock}>
             <Pressable style={[styles.profileIconShell, { backgroundColor: ui.softBg }]} onPress={openProfile}>
@@ -2337,7 +2463,8 @@ export default function MainScreen() {
             <SupportIcon color={isDark ? ui.text : '#ffffff'} />
           </Pressable>
         </View>
-      </Animated.View> : null}
+      </Animated.View>
+      ) : null}
 
       {/* Profile Modal — replaced by full screen, block removed */}
 
@@ -2413,94 +2540,142 @@ export default function MainScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={mapLocationAction !== null && mapLocationAction.anchorScreen !== null}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setMapLocationAction(null)}
+      >
+        <View style={styles.mapRadialRoot} {...mapRadialPanResponder.panHandlers}>
+          <BlurView intensity={Platform.OS === 'ios' ? 38 : 24} tint="dark" style={StyleSheet.absoluteFillObject} />
+          <View style={[StyleSheet.absoluteFillObject, styles.mapRadialDim]} />
+          {mapLocationAction?.resolving ? (
+            <Text style={[styles.mapRadialHint, styles.mapRadialHintLoading]} pointerEvents="none">
+              Finding address…
+            </Text>
+          ) : mapLocationAction ? (
+            <Text style={styles.mapRadialHint} pointerEvents="none">
+              {mapLocationAction.radialRevealed
+                ? 'Tap From or To to fill that field.'
+                : 'Drag slightly from the pin to show From and To.'}
+            </Text>
+          ) : null}
+          {mapLocationAction?.anchorScreen ? (
+            <MapRadialFabs
+              anchor={mapLocationAction.anchorScreen}
+              radialRevealed={mapLocationAction.radialRevealed}
+              resolving={mapLocationAction.resolving}
+            />
+          ) : null}
+        </View>
+      </Modal>
+
       {/* Bottom sheet — scrollable cards */}
       <Animated.View
         style={[
           styles.contentScroll,
-          { backgroundColor: 'transparent', maxHeight: searchSheetMaxHeight, overflow: 'hidden' },
+          {
+            backgroundColor: 'transparent',
+            overflow: 'hidden',
+            top: sheetTopAnim,
+            maxHeight: sheetMaxHeightAnim,
+            borderTopLeftRadius: sheetTopRadiusAnim,
+            borderTopRightRadius: sheetTopRadiusAnim,
+            zIndex: toFocused || destinationFocused ? 10 : 2,
+          },
           {
             transform: [
               {
-                translateY: Animated.add(Animated.add(panValue, searchSheetTranslateY), minimizedTranslateY),
+                translateY: Animated.add(panValue, minimizedTranslateY),
               },
             ],
           },
         ]}
-        {...(!searchExpanded ? panResponder.panHandlers : {})}
+        {...panResponder.panHandlers}
       >
-        {/* Panel background — fades out when search is focused so map shows through */}
-        <Animated.View
+        <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFillObject, { backgroundColor: ui.panelBg, borderTopLeftRadius: 28, borderTopRightRadius: 28, opacity: sheetBgOpacity }]}
+          style={[StyleSheet.absoluteFillObject, { backgroundColor: ui.panelBg, borderTopLeftRadius: 28, borderTopRightRadius: 28 }]}
         />
+      
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          presentRide ? { paddingTop: 112 } : null,
+        ]}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
         bounces={true}
-        scrollEnabled={!searchExpanded}
+        scrollEnabled
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshingMain}
+            onRefresh={onRefreshMain}
+            tintColor={ui.textMuted}
+            colors={[ui.ctaBg]}
+          />
+        }
         onScroll={(e) => {
           scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
         }}
       >
         {/* Drag handle */}
-        {!searchExpanded ? (
-          <View style={styles.dragHandleZone}>
-            <View style={styles.dragHandle} />
-          </View>
-        ) : null}
+        <View style={styles.dragHandleZone}>
+          <View style={styles.dragHandle} />
+        </View>
+
+        {presentRide ? (
+        <View style={{ position: 'absolute', left: 12, right: 12, top: 14, zIndex: 12 }}>
+          <Pressable
+            style={{
+              backgroundColor: '#fde68a',
+              borderColor: '#f59e0b',
+              borderWidth: 1,
+              borderRadius: 14,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+            }}
+            onPress={() => {
+              setActiveTrip(presentRide);
+              setScreen('activeRide');
+            }}
+          >
+            <Text style={{ color: '#713f12', fontWeight: '800', fontSize: 13 }}>
+              Current ride · {presentRide.bookedFor === 'friend' ? 'Booked for friend' : 'Booked for you'}
+            </Text>
+            <Text style={{ color: '#78350f', marginTop: 2 }} numberOfLines={1}>
+              {presentRide.driverName} · {presentRide.carDetails} · PIN {presentRide.driverPin}
+            </Text>
+            <Text style={{ color: '#78350f', marginTop: 2 }} numberOfLines={1}>
+              {presentRide.fromLabel} → {presentRide.toLabel}
+            </Text>
+            <Text style={{ color: '#78350f', marginTop: 4, fontWeight: '600' }} numberOfLines={1}>
+              Tap to open live trip details
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
 
         {/* Destination Input Card */}
-        <View style={[
-          styles.destinationCard, 
-          { backgroundColor: searchExpanded ? 'transparent' : ui.cardBg },
-          searchExpanded
-            ? {
-                shadowOpacity: 0,
-                elevation: 0,
-                paddingHorizontal: 0,
-                paddingVertical: 0,
-                marginBottom: 0,
-                position: 'absolute',
-                top: -10,
-                left: 0,
-                right: 0,
-                zIndex: 8,
-              }
-            : {}
-        ]}>
-          <View style={[
-            styles.destinationSearchGroup, 
-            { backgroundColor: searchExpanded ? 'transparent' : ui.softBg },
-            searchExpanded ? { gap: 10, overflow: 'visible' } : {}
-          ]}>
-            <View pointerEvents="none" style={styles.searchConnector}>
-              <View style={styles.searchConnectorTopDot} />
-              <View style={styles.searchConnectorLine} />
-              <View style={styles.searchConnectorBottomPinOuter}>
-                <View style={styles.searchConnectorBottomPinInner} />
-              </View>
-            </View>
-
+        <View style={[styles.destinationCard, { backgroundColor: ui.cardBg }]}>
+          <View style={[styles.destinationSearchGroup, { backgroundColor: ui.softBg }]}>
             <View
               style={[
                 styles.whereToRow,
-                !searchExpanded && styles.whereToRowTop,
-                searchExpanded
-                  && {
-                    borderRadius: 0,
-                    borderWidth: 0,
-                    borderTopWidth: 0,
-                    borderBottomWidth: 2.5,
-                    borderBottomColor: '#171717',
-                    marginLeft: 28,
-                    marginRight: 14,
-                  },
+                styles.whereToRowTop,
                 toFocused ? styles.whereToRowActive : null,
-                { backgroundColor: searchExpanded ? (isDark ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.66)') : (isDark ? '#22242a' : undefined) },
+                { backgroundColor: isDark ? '#22242a' : '#f2f2f2' },
               ]}
             >
+              <Ionicons
+                name="location-outline"
+                size={18}
+                color={toFocused ? ui.text : ui.placeholder}
+              />
               <TextInput
                 ref={toInputRef}
                 style={[styles.whereToInput, { color: ui.text }]}
@@ -2511,33 +2686,27 @@ export default function MainScreen() {
                 }}
                 onFocus={handleToFocus}
                 onBlur={handleToBlur}
-                placeholder="From where?"
+                placeholder="From where? (address, place, or lat, lng)"
                 placeholderTextColor={ui.placeholder}
                 returnKeyType="search"
                 autoCorrect={false}
-                autoCapitalize="words"
+                autoCapitalize="none"
               />
-              {!searchExpanded ? <View style={styles.whereToBottomLine} /> : null}
             </View>
 
             <View
               style={[
                 styles.whereToRow,
-                !searchExpanded && styles.whereToRowBottom,
-                searchExpanded
-                  && {
-                    borderRadius: 0,
-                    borderTopWidth: 0,
-                    borderWidth: 0,
-                    borderBottomWidth: 2.5,
-                    borderBottomColor: '#171717',
-                    marginLeft: 28,
-                    marginRight: 14,
-                  },
+                styles.whereToRowBottom,
                 destinationFocused ? styles.whereToRowActive : null,
-                { backgroundColor: searchExpanded ? (isDark ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.66)') : (isDark ? '#22242a' : undefined) },
+                { backgroundColor: isDark ? '#22242a' : '#f2f2f2' },
               ]}
             >
+              <Ionicons
+                name="search"
+                size={18}
+                color={destinationFocused ? ui.text : ui.placeholder}
+              />
               <TextInput
                 ref={destinationInputRef}
                 style={[styles.whereToInput, { color: ui.text }]}
@@ -2545,34 +2714,32 @@ export default function MainScreen() {
                 onChangeText={setDestinationQuery}
                 onFocus={handleDestinationFocus}
                 onBlur={handleDestinationBlur}
-                placeholder="Where to?"
+                placeholder="Where to? (address, place, or lat, lng)"
                 placeholderTextColor={ui.placeholder}
                 returnKeyType="search"
                 autoCorrect={false}
-                autoCapitalize="words"
+                autoCapitalize="none"
               />
-              {!searchExpanded ? <View style={[styles.whereToBottomLine, styles.whereToBottomLineFocused]} /> : null}
-            </View>
-          </View>
-
-          {searchExpanded ? (
-            <View style={styles.searchActionRow}>
-              <Pressable style={[styles.nowBadge, styles.searchActionBadge, { backgroundColor: ui.ctaBg }]}>
-                <Text style={[styles.nowText, { color: ui.ctaText }]}>Go ▾</Text>
+              <Pressable
+                style={[styles.nowBadge, { backgroundColor: isDark ? ui.ctaBg : '#171717' }]}
+                onPress={openFindingDriver}
+                accessibilityRole="button"
+                accessibilityLabel="Find driver and request ride"
+              >
+                <Text style={[styles.nowText, { color: isDark ? ui.ctaText : '#ffffff' }]}>Go ▾</Text>
               </Pressable>
             </View>
-          ) : null}
+          </View>
 
           {hasRouteInputs && routeIssue ? (
             <Text style={styles.routeIssueText}>{routeIssue}</Text>
           ) : null}
 
           {toFocused && filteredToSuggestions.length > 0 ? (
-            <View style={[styles.suggestionList, { backgroundColor: 'transparent', borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', overflow: 'hidden' }]}>
-              <BlurView intensity={isDark ? 65 : 80} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
+            <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {filteredToSuggestions.map((item, index) => (
                 <View key={item.id}>
-                  <Pressable style={styles.suggestionItem} onPressIn={() => selectTo(item.fullText ?? item.title)}>
+                  <Pressable style={styles.suggestionItem} onPress={() => selectTo(item)}>
                     <View style={[styles.suggestionIconWrap, { backgroundColor: ui.softBg }]}>
                       <Ionicons name={item.icon} size={16} color={ui.text} />
                     </View>
@@ -2589,11 +2756,10 @@ export default function MainScreen() {
           ) : null}
 
           {destinationFocused && filteredSuggestions.length > 0 ? (
-            <View style={[styles.suggestionList, { backgroundColor: 'transparent', borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', overflow: 'hidden' }]}>
-              <BlurView intensity={isDark ? 65 : 80} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
+            <View style={[styles.suggestionList, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {filteredSuggestions.map((item, index) => (
                 <View key={item.id}>
-                  <Pressable style={styles.suggestionItem} onPressIn={() => selectDestination(item.fullText ?? item.title)}>
+                  <Pressable style={styles.suggestionItem} onPress={() => selectDestination(item)}>
                     <View style={[styles.suggestionIconWrap, { backgroundColor: ui.softBg }]}>
                       <Ionicons name={item.icon} size={16} color={ui.text} />
                     </View>
@@ -2609,7 +2775,7 @@ export default function MainScreen() {
             </View>
           ) : null}
 
-          {!searchExpanded ? <View style={[styles.addressList, { backgroundColor: ui.cardBg }]}>
+          <View style={[styles.addressList, { backgroundColor: ui.cardBg }]}>
             <Pressable style={styles.addressItem} onPress={() => openAddress('home')}>
               <View style={[styles.addressIconHome, { backgroundColor: isDark ? '#2b2b31' : undefined }]}>
                 <Ionicons name="home" size={14} color={ui.text} />
@@ -2631,12 +2797,12 @@ export default function MainScreen() {
               </View>
               <Ionicons name={workAddress ? 'pencil' : 'add-circle-outline'} size={18} color={ui.placeholder} />
             </Pressable>
-          </View> : null}
+          </View>
         </View>
 
         {/* Service Type Cards */}
-        {!searchExpanded ? <Text style={[styles.serviceRowHeader, { color: ui.text }]}>Ready to ride?</Text> : null}
-        {!searchExpanded ? <View style={styles.serviceRow}>
+        <Text style={[styles.serviceRowHeader, { color: ui.text }]}>Ready to ride?</Text>
+        <View style={styles.serviceRow}>
           {(
             [
               { id: 'ride', label: 'Ride', sub: '2 min away', discount: '10%' },
@@ -2644,7 +2810,7 @@ export default function MainScreen() {
               { id: 'outstation', label: 'Outstation', sub: 'Long trips', discount: '25%' },
             ] as { id: string; label: string; sub: string; discount: string }[]
           ).map(({ id, label, sub, discount }) => {
-            const disabled = id === 'rental';
+            const disabled = id === 'rental' || id === 'outstation';
             const active = !disabled && selectedRide === id;
             return (
               <Pressable
@@ -2663,8 +2829,16 @@ export default function MainScreen() {
                   <Image source={greyCarAsset} style={styles.serviceCarImage} resizeMode="contain" />
                 </View>
                 <View style={[styles.serviceDiscountPill, active && styles.serviceDiscountPillActive, disabled && styles.serviceDiscountPillDisabled]}>
-                  <Text style={[styles.serviceDiscountText, active && styles.serviceDiscountTextActive, disabled && styles.serviceDiscountTextDisabled]}>
-                    {discount} OFF
+                  <Text
+                    style={[
+                      styles.serviceDiscountText,
+                      active && styles.serviceDiscountTextActive,
+                      disabled && styles.serviceDiscountTextDisabled,
+                      disabled && styles.serviceDiscountTextComingSoon,
+                    ]}
+                    numberOfLines={2}
+                  >
+                    {disabled ? 'Coming soon' : `${discount} OFF`}
                   </Text>
                 </View>
                 <Text style={[styles.serviceTitle, active && styles.serviceTitleActive, disabled && styles.serviceTitleDisabled]}>{label}</Text>
@@ -2672,278 +2846,115 @@ export default function MainScreen() {
               </Pressable>
             );
           })}
-        </View> : null}
+        </View>
+
+        {/* Promotional Card */}
+        <View style={[styles.promoCard, { backgroundColor: isDark ? '#151517' : undefined }]}>
+          <View style={styles.promoContent}>
+            <Text style={[styles.promoTitle, { color: isDark ? ui.text : undefined }]}>Invest today. Secure a{'\n'}healthy tomorrow &{'\n'}every day.</Text>
+            <Pressable style={styles.promoButton}>
+              <Text style={styles.promoButtonText}>Invest Now!</Text>
+            </Pressable>
+          </View>
+          <View style={styles.promoIllustration}>
+            <View style={styles.promoBox1} />
+            <View style={styles.promoBox2} />
+            <View style={styles.promoBox3} />
+          </View>
+        </View>
 
         {/* Top Drivers */}
-        {!searchExpanded ? (
-          <View style={styles.topDriversSection}>
-            <View style={styles.topDriversHeader}>
-              <Text style={[styles.topDriversTitle, { color: ui.text }]}>Your Top Drivers</Text>
-              <Text style={[styles.topDriversSub, { color: ui.textMuted }]}>Based on your rides</Text>
-            </View>
-            <View style={styles.topDriversOverflow} {...driverPanResponder.panHandlers}>
-              <Animated.View
-                style={[styles.topDriversScroll, { transform: [{ translateX: driverPosAnim }] }]}
-              >
-                {[...mockTopDrivers, ...mockTopDrivers].map((driver, i) => (
-                  <View
-                    key={`${driver.id}-${i}`}
-                    style={[styles.driverCard, { backgroundColor: isDark ? '#1b1c20' : '#ffffff' }]}
-                  >
-                    <View style={[styles.driverAvatar, { backgroundColor: driver.color }]}>
-                      <Ionicons name="person" size={34} color="#ffffff" />
-                    </View>
-                    <Text style={[styles.driverName, { color: ui.text }]} numberOfLines={1}>{driver.name}</Text>
-                    <View style={styles.driverRatingRow}>
-                      <Ionicons name="star" size={13} color="#FFD000" />
-                      <Text style={[styles.driverRatingText, { color: ui.text }]}>{driver.rating.toFixed(1)}</Text>
-                    </View>
-                    <View style={[styles.driverTripsBadge, { backgroundColor: isDark ? '#2b2b31' : '#f5f5f5' }]}>
-                      <Text style={[styles.driverTripsText, { color: ui.textMuted }]}>{driver.trips} trips</Text>
-                    </View>
-                    <Pressable style={styles.driverBookBtn}>
-                      <Text style={styles.driverBookBtnText}>Book Again</Text>
-                    </Pressable>
-                  </View>
-                ))}
-              </Animated.View>
-            </View>
+        <View style={styles.topDriversSection}>
+          <View style={styles.topDriversHeader}>
+            <Text style={[styles.topDriversTitle, { color: ui.text }]}>Your Top Drivers</Text>
+            <Text style={[styles.topDriversSub, { color: ui.textMuted }]}>Based on your rides</Text>
           </View>
-        ) : null}
+          <View style={styles.topDriversOverflow} {...driverPanResponder.panHandlers}>
+            <Animated.View
+              style={[styles.topDriversScroll, { transform: [{ translateX: driverPosAnim }] }]}
+            >
+              {[...mockTopDrivers, ...mockTopDrivers].map((driver, i) => (
+                <View
+                  key={`${driver.id}-${i}`}
+                  style={[styles.driverCard, { backgroundColor: isDark ? '#1b1c20' : '#ffffff' }]}
+                >
+                  <View style={[styles.driverAvatar, { backgroundColor: driver.color }]}>
+                    <Ionicons name="person" size={34} color="#ffffff" />
+                  </View>
+                  <Text style={[styles.driverName, { color: ui.text }]} numberOfLines={1}>{driver.name}</Text>
+                  <View style={styles.driverRatingRow}>
+                    <Ionicons name="star" size={13} color="#FFD000" />
+                    <Text style={[styles.driverRatingText, { color: ui.text }]}>{driver.rating.toFixed(1)}</Text>
+                  </View>
+                  <View style={[styles.driverTripsBadge, { backgroundColor: isDark ? '#2b2b31' : '#f5f5f5' }]}>
+                    <Text style={[styles.driverTripsText, { color: ui.textMuted }]}>{driver.trips} trips</Text>
+                  </View>
+                  <Pressable style={styles.driverBookBtn}>
+                    <Text style={styles.driverBookBtnText}>Book Again</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </Animated.View>
+          </View>
+        </View>
       </ScrollView>
       </Animated.View>
 
-      {/* ── Activity Tab ────────────────────────────────────── */}
       {activeTab === 'activity' ? (
-        <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
-          <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
-            <View style={styles.tabScreenHeaderRow}>
-              <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Activity</Text>
-              <Pressable
-                style={[styles.tabSearchIconBtn, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}
-                onPress={() => { setActivitySearchOpen(v => !v); setActivitySearch(''); }}
-              >
-                <Ionicons name={activitySearchOpen ? 'close' : 'search'} size={18} color={ui.text} />
-              </Pressable>
-            </View>
-            {activitySearchOpen ? (
-              <View style={[styles.tabSearchBar, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0', borderColor: ui.divider }]}>
-                <Ionicons name="search" size={15} color={ui.textMuted} />
-                <TextInput
-                  style={[styles.tabSearchInput, { color: ui.text }]}
-                  value={activitySearch}
-                  onChangeText={setActivitySearch}
-                  placeholder="Search activity..."
-                  placeholderTextColor={ui.placeholder}
-                  autoFocus
-                  autoCorrect={false}
-                />
-              </View>
-            ) : null}
-          </View>
-          <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activityFilterRow} contentContainerStyle={styles.activityFilterContent}>
-              {ACTIVITY_FILTERS.map(f => (
-                <Pressable
-                  key={f.key}
-                  style={[styles.activityFilterPill, activityFilter === f.key && styles.activityFilterPillActive]}
-                  onPress={() => setActivityFilter(f.key)}
-                >
-                  <Text style={[styles.activityFilterPillText, activityFilter === f.key && styles.activityFilterPillTextActive]}>{f.label}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-            {(() => {
-              const filtered = mockActivityFeed.filter(item => {
-                const s = activitySearch.trim().toLowerCase();
-                if (s && ![item.title, item.subtitle].some(t => t.toLowerCase().includes(s))) return false;
-                if (activityFilter === 'today') return item.daysAgo === 0;
-                if (activityFilter === 'yesterday') return item.daysAgo === 1;
-                if (activityFilter === '7days') return item.daysAgo <= 6;
-                if (activityFilter === 'month') return item.daysAgo <= 30;
-                return true;
-              });
-              if (filtered.length === 0) {
-                return <Text style={[styles.activityEmpty, { color: ui.textMuted }]}>No activity found</Text>;
-              }
-              const nodes: JSX.Element[] = [];
-              let lastGroup = '';
-              filtered.forEach(item => {
-                const group = item.daysAgo === 0 ? 'Today' : item.daysAgo === 1 ? 'Yesterday' : item.daysAgo <= 6 ? 'Earlier This Week' : 'Last Month';
-                if (group !== lastGroup) {
-                  nodes.push(
-                    <Text key={`grp-${group}`} style={[styles.activityGroupHeader, { color: ui.textMuted }]}>{group}</Text>
-                  );
-                  lastGroup = group;
-                }
-                nodes.push(
-                  <Pressable key={item.id} style={[styles.tabCard, { backgroundColor: ui.cardBg }]} onPress={() => item.rideData ? setSelectedRideDetail(item.rideData) : null}>
-                    <View style={styles.activityCardContent}>
-                      <View style={styles.activityCardRow}>
-                        <Text style={[styles.activityCardTitle, { color: ui.text }]} numberOfLines={1}>{item.title}</Text>
-                        {item.type === 'ride'
-                          ? <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-                          : null}
-                      </View>
-                      <Text style={[styles.activityCardSub, { color: ui.textMuted }]}>{item.subtitle} · {item.time}</Text>
-                    </View>
-                  </Pressable>
-                );
-              });
-              return nodes;
-            })()}
-          </ScrollView>
-        </View>
+        <ActivityTabScreen
+          ui={ui}
+          isDark={isDark}
+          activitySearch={activitySearch}
+          setActivitySearch={setActivitySearch}
+          activitySearchOpen={activitySearchOpen}
+          setActivitySearchOpen={setActivitySearchOpen}
+          activityFilter={activityFilter}
+          setActivityFilter={setActivityFilter}
+          onSelectRideDetail={(ride) => setSelectedRideDetail(ride)}
+          presentRide={presentRide}
+          onOpenPresentRide={() => setScreen('activeRide')}
+          recentBookedRides={bookedRides}
+          onOpenBookedRide={openBookedRideFromActivity}
+          refreshing={refreshingMain}
+          onRefresh={onRefreshMain}
+        />
       ) : null}
 
-      {/* ── Favourites Tab ──────────────────────────────────── */}
       {activeTab === 'notifications' ? (
-        <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
-          <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
-            <View style={styles.tabScreenHeaderRow}>
-              <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Favourites</Text>
-              <Pressable
-                style={[styles.tabSearchIconBtn, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}
-                onPress={() => { setFavSearchOpen(v => !v); setFavSearch(''); }}
-              >
-                <Ionicons name={favSearchOpen ? 'close' : 'search'} size={18} color={ui.text} />
-              </Pressable>
-            </View>
-            {favSearchOpen ? (
-              <View style={[styles.tabSearchBar, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0', borderColor: ui.divider }]}>
-                <Ionicons name="search" size={15} color={ui.textMuted} />
-                <TextInput
-                  style={[styles.tabSearchInput, { color: ui.text }]}
-                  value={favSearch}
-                  onChangeText={setFavSearch}
-                  placeholder="Search places..."
-                  placeholderTextColor={ui.placeholder}
-                  autoFocus
-                  autoCorrect={false}
-                />
-              </View>
-            ) : null}
-          </View>
-          <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
-            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Saved places</Text>
-              {mockFavouritePlaces
-                .filter(p => !favSearch.trim() || [p.title, p.subtitle].some(s => s.toLowerCase().includes(favSearch.toLowerCase())))
-                .map((place) => (
-                <View key={place.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-                  <View style={styles.favItem}>
-                    <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
-                      <Ionicons name={place.icon} size={18} color={ui.text} />
-                    </View>
-                    <View style={styles.favBody}>
-                      <Text style={[styles.favTitle, { color: ui.text }]}>{place.title}</Text>
-                      <Text style={[styles.favSubtitle, { color: ui.textMuted }]}>{place.subtitle}</Text>
-                    </View>
-                    <Ionicons name="heart" size={18} color="#ef4444" />
-                  </View>
-                </View>
-              ))}
-
-            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Frequent routes</Text>
-              {[
-                { from: 'Half-Way Tree', to: 'Norman Manley Airport', count: 6 },
-                { from: 'New Kingston', to: 'Portmore Mall', count: 3 },
-              ].map((route, i) => (
-                <View key={i} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-                  <View style={styles.favItem}>
-                    <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
-                      <Ionicons name="repeat" size={18} color={ui.text} />
-                    </View>
-                    <View style={styles.favBody}>
-                      <Text style={[styles.favTitle, { color: ui.text }]}>{route.from} → {route.to}</Text>
-                      <Text style={[styles.favSubtitle, { color: ui.textMuted }]}>{route.count} rides</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-                  </View>
-                </View>
-              ))}
-          </ScrollView>
-        </View>
+        <FavouritesTabScreen
+          ui={ui}
+          isDark={isDark}
+          favSearch={favSearch}
+          setFavSearch={setFavSearch}
+          favSearchOpen={favSearchOpen}
+          setFavSearchOpen={setFavSearchOpen}
+          refreshing={refreshingMain}
+          onRefresh={onRefreshMain}
+        />
       ) : null}
 
-      {/* ── Settings Tab ────────────────────────────────────── */}
       {activeTab === 'settings' ? (
-        <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
-          <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
-            <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Settings</Text>
-          </View>
-          <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
+        <SettingsTabScreen
+          ui={ui}
+          openProfile={openProfile}
+          setScreen={setScreen}
+          selectedLang={selectedLang}
+          themeOverride={themeOverride}
+          refreshing={refreshingMain}
+          onRefresh={onRefreshMain}
+        />
+      ) : null}
 
-            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Account</Text>
-            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-              <Pressable style={styles.settingsRow} onPress={openProfile}>
-                <Ionicons name="person-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Edit Profile</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsPassword')}>
-                <Ionicons name="lock-closed-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Change Password</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsNotifications')}>
-                <Ionicons name="notifications-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Notifications</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-            </View>
-
-            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Preferences</Text>
-            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-              <Pressable style={styles.settingsRow} onPress={openProfile}>
-                <Ionicons name="card-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Payment Methods</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsLanguage')}>
-                <Ionicons name="language-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Language</Text>
-                <View style={styles.settingsRowRight}>
-                  <Text style={[styles.settingsRowValue, { color: ui.textMuted }]}>{selectedLang}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-                </View>
-              </Pressable>
-              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsAppearance')}>
-                <Ionicons name="color-palette-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Appearance</Text>
-                <View style={styles.settingsRowRight}>
-                  <Text style={[styles.settingsRowValue, { color: ui.textMuted }]}>
-                    {themeOverride === 'system' ? 'System' : themeOverride === 'light' ? 'Light' : 'Dark'}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-                </View>
-              </Pressable>
-            </View>
-
-            <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Support</Text>
-            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsHelp')}>
-                <Ionicons name="help-circle-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Help Centre</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsSupport')}>
-                <Ionicons name="headset-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Contact Support</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-              <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-              <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsTerms')}>
-                <Ionicons name="document-text-outline" size={20} color={ui.text} />
-                <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Terms & Privacy</Text>
-                <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
-              </Pressable>
-            </View>
-          </ScrollView>
+      {sheetMinimized && activeTab === 'home' ? (
+        <View style={[styles.sheetRestoreWrap, { bottom: SHEET_RESTORE_BTN_BOTTOM }]} pointerEvents="box-none">
+          <Pressable
+            style={[styles.sheetRestoreBtn, { backgroundColor: isDark ? 'rgba(48,48,52,0.95)' : 'rgba(23,23,23,0.88)' }]}
+            onPress={expandSheetFromMinimized}
+            accessibilityRole="button"
+            accessibilityLabel="Open trip sheet"
+          >
+            <Ionicons name="chevron-up" size={22} color="#ffffff" />
+          </Pressable>
         </View>
       ) : null}
 
@@ -2974,1781 +2985,4 @@ export default function MainScreen() {
 }
 
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  mapWrapper: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 0,
-    overflow: 'hidden',
-  },
-  contentScroll: {
-    position: 'absolute',
-    top: MAP_HEIGHT - 30,
-    left: 0,
-    right: 0,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    zIndex: 2,
-  },
-  fixedHeader: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(255,255,255,0.82)',
-    paddingHorizontal: 20,
-    paddingTop: 68,
-    paddingBottom: 15,
-    zIndex: 5,
-  },
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 120,
-    gap: 18,
-  },
-  dragHandleZone: {
-    alignItems: 'center',
-    paddingTop: 6,
-    paddingBottom: 6,
-  },
-  dragHandle: {
-    alignSelf: 'center',
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#e0e0e0',
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  profileBlock: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
-  profileLabels: {
-    justifyContent: 'center',
-    flexShrink: 1,
-  },
-  profileIconShell: {
-    width: PROFILE_HEADER_TEXT_HEIGHT,
-    height: PROFILE_HEADER_TEXT_HEIGHT,
-    borderRadius: PROFILE_HEADER_TEXT_HEIGHT / 2,
-    backgroundColor: '#d8d8d8',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  greeting: {
-    color: '#666666',
-    fontSize: 13,
-    fontWeight: '600',
-    lineHeight: PROFILE_GREETING_LINE_HEIGHT,
-  },
-  userName: {
-    color: '#171717',
-    fontSize: 22,
-    fontWeight: '800',
-    lineHeight: PROFILE_NAME_LINE_HEIGHT,
-  },
-  supportButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#171717',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  heroCard: {
-    backgroundColor: '#171717',
-    borderRadius: 30,
-    padding: 18,
-    gap: 16,
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 16,
-  },
-  heroTextBlock: {
-    flex: 1,
-    gap: 8,
-  },
-  heroEyebrow: {
-    color: '#ffd54a',
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1.1,
-  },
-  heroTitle: {
-    color: '#ffffff',
-    fontSize: 30,
-    fontWeight: '800',
-    lineHeight: 34,
-  },
-  heroSubtitle: {
-    color: '#ffffff',
-    fontSize: 14,
-    lineHeight: 21,
-    opacity: 0.8,
-  },
-  heroBadge: {
-    width: 58,
-    height: 58,
-    borderRadius: 20,
-    backgroundColor: '#ffd54a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  heroBadgeLabel: {
-    color: '#171717',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  mapCard: {
-    height: 240,
-    borderRadius: 24,
-    backgroundColor: '#dfe7ef',
-    overflow: 'hidden',
-    position: 'relative',
-    marginBottom: 16,
-  },
-  mapTopShade: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: 54,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-  },
-  mapMarkerPickup: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#171717',
-    borderWidth: 5,
-    borderColor: '#ffd54a',
-  },
-  mapMarkerDropoff: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#ffd54a',
-    borderWidth: 5,
-    borderColor: '#171717',
-  },
-  routeAnimatorOuter: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#171717',
-  },
-  routeAnimatorInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#171717',
-  },
-  mapTiltLayer: {
-    position: 'absolute',
-    left: 18,
-    right: 18,
-    top: 20,
-    bottom: 20,
-    borderRadius: 28,
-    backgroundColor: '#f8fbff',
-    transform: [{ rotate: '-8deg' }],
-  },
-  mapBlockLarge: {
-    position: 'absolute',
-    left: 26,
-    top: 26,
-    width: 92,
-    height: 58,
-    borderRadius: 18,
-    backgroundColor: '#dde7f0',
-    transform: [{ rotate: '-11deg' }],
-  },
-  mapBlockMedium: {
-    position: 'absolute',
-    right: 28,
-    top: 54,
-    width: 78,
-    height: 52,
-    borderRadius: 18,
-    backgroundColor: '#d6e1eb',
-    transform: [{ rotate: '10deg' }],
-  },
-  mapBlockSmall: {
-    position: 'absolute',
-    left: 54,
-    bottom: 34,
-    width: 120,
-    height: 64,
-    borderRadius: 22,
-    backgroundColor: '#dfe9f2',
-    transform: [{ rotate: '7deg' }],
-  },
-  mapRouteShadow: {
-    position: 'absolute',
-    left: 76,
-    right: 58,
-    top: 74,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(42, 93, 160, 0.18)',
-    transform: [{ rotate: '16deg' }],
-  },
-  mapRouteLine: {
-    position: 'absolute',
-    left: 72,
-    right: 56,
-    top: 70,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: '#3c79bf',
-    transform: [{ rotate: '16deg' }],
-  },
-  mapRoadHorizontal: {
-    position: 'absolute',
-    top: 94,
-    left: -24,
-    right: 12,
-    height: 26,
-    backgroundColor: '#ffffff',
-    transform: [{ rotate: '-14deg' }],
-  },
-  mapRoadVertical: {
-    position: 'absolute',
-    right: 88,
-    top: -16,
-    bottom: -24,
-    width: 30,
-    backgroundColor: '#ffffff',
-    transform: [{ rotate: '18deg' }],
-  },
-  mapPinPrimary: {
-    position: 'absolute',
-    left: 132,
-    top: 92,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#171717',
-    borderWidth: 5,
-    borderColor: '#ffd54a',
-  },
-  mapPinSecondary: {
-    position: 'absolute',
-    right: 46,
-    top: 68,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#ffd54a',
-    borderWidth: 5,
-    borderColor: '#171717',
-  },
-  driverChip: {
-    position: 'absolute',
-    right: 16,
-    top: 20,
-    borderRadius: 999,
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  driverChipText: {
-    color: '#171717',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  mapCarMarker: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    marginLeft: -30,
-    marginTop: -16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapCarMarkerShadow: {
-    position: 'absolute',
-    bottom: -2,
-    width: 54,
-    height: 14,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0, 0, 0, 0.16)',
-  },
-  mapCarMarkerBubble: {
-    width: 76,
-    height: 56,
-    borderRadius: 22,
-    backgroundColor: '#ffffff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  mapMiniCarLeft: {
-    position: 'absolute',
-    left: 34,
-    top: 126,
-    transform: [{ rotate: '-12deg' }, { scale: 0.72 }],
-    opacity: 0.9,
-  },
-  mapMiniCarRight: {
-    position: 'absolute',
-    right: 18,
-    bottom: 38,
-    transform: [{ rotate: '10deg' }, { scale: 0.68 }],
-    opacity: 0.85,
-  },
-  mapExpandBtn: {
-    position: 'absolute',
-    bottom: TAB_BAR_RESERVED_BOTTOM + 14,
-    right: 16,
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: 'rgba(23,23,23,0.72)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 3,
-  },
-  expandedMapWrap: {
-    flex: 1,
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height,
-    backgroundColor: '#000',
-  },
-  mapCollapseBtn: {
-    position: 'absolute',
-    top: 56,
-    right: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(23,23,23,0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // Modals
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 24,
-    paddingBottom: 40,
-    gap: 14,
-  },
-  modalHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#e0e0e0',
-    alignSelf: 'center',
-    marginBottom: 4,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#171717',
-    textAlign: 'center',
-  },
-  modalAvatarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginTop: 4,
-  },
-  modalAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#ffd54a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#999999',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  modalInput: {
-    borderWidth: 1.5,
-    borderColor: '#e8e8e8',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#171717',
-    backgroundColor: '#fafafa',
-  },
-  modalAddressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#f7f7f7',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  modalAddressText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#555555',
-    fontWeight: '500',
-  },
-  modalSaveBtn: {
-    backgroundColor: '#171717',
-    borderRadius: 16,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  modalSaveBtnText: {
-    color: '#ffd54a',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  modalCancelBtn: {
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  modalCancelBtnText: {
-    color: '#999999',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  supportModalIcon: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: '#f5f5f5',
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'center',
-    marginBottom: 4,
-  },
-  supportModalSubtitle: {
-    fontSize: 14,
-    color: '#888888',
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  supportOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    backgroundColor: '#f7f7f7',
-    borderRadius: 16,
-  },
-  supportOptionText: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#171717',
-  },
-  // Destination Card
-  destinationCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 24,
-    padding: 18,
-    gap: 14,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  destinationOverlay: {
-    position: 'absolute',
-    top: 108,
-    left: 20,
-    right: 20,
-    zIndex: 7,
-  },
-  destinationOverlayInner: {
-    borderRadius: 26,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.74)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.55)',
-    padding: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.12,
-    shadowRadius: 22,
-    elevation: 10,
-  },
-  destinationOverlaySearchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: 'rgba(255,255,255,0.78)',
-    borderRadius: 999,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-  },
-  destinationSearchGroup: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  whereToRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#f2f2f2',
-    height: 52,
-    paddingVertical: 0,
-    paddingLeft: 54,
-    paddingRight: 16,
-    position: 'relative',
-  },
-  whereToRowTop: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-  },
-  whereToRowBottom: {
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: 0,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#dcdcdc',
-  },
-  whereToRowActive: {
-    backgroundColor: '#eef3f8',
-  },
-  whereToTriggerText: {
-    color: '#aaaaaa',
-    fontSize: 15,
-    fontWeight: '500',
-    flex: 1,
-  },
-  whereToTriggerTextFilled: {
-    color: '#171717',
-  },
-  whereToInput: {
-    color: '#171717',
-    fontSize: 15,
-    fontWeight: '500',
-    flex: 1,
-  },
-  whereToBottomLine: {
-    position: 'absolute',
-    left: 44,
-    right: 14,
-    bottom: 7,
-    height: 2,
-    borderRadius: 999,
-    backgroundColor: '#171717',
-    opacity: 0.9,
-  },
-  whereToBottomLineFocused: {
-    left: 0,
-    right: 0,
-  },
-  searchConnector: {
-    position: 'absolute',
-    left: 17,
-    top: 16,
-    bottom: 16,
-    width: 16,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 2,
-  },
-  searchConnectorTopDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 999,
-    backgroundColor: '#f4c430',
-    borderWidth: 2,
-    borderColor: '#171717',
-  },
-  searchConnectorLine: {
-    width: 2,
-    flex: 1,
-    marginVertical: 4,
-    backgroundColor: '#171717',
-    borderRadius: 999,
-  },
-  searchConnectorBottomPinOuter: {
-    width: 14,
-    height: 14,
-    borderRadius: 4,
-    backgroundColor: '#171717',
-    alignItems: 'center',
-    justifyContent: 'center',
-    transform: [{ rotate: '45deg' }],
-  },
-  searchConnectorBottomPinInner: {
-    width: 7,
-    height: 7,
-    borderRadius: 999,
-    backgroundColor: '#f4c430',
-  },
-  searchActionRow: {
-    marginTop: 10,
-    marginLeft: 28,
-    marginRight: 14,
-    alignItems: 'flex-end',
-  },
-  nowBadge: {
-    backgroundColor: '#171717',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  searchActionBadge: {
-    minWidth: 78,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nowText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  routeIssueText: {
-    color: '#9a6b00',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 8,
-    marginHorizontal: 6,
-  },
-  suggestionList: {
-    borderRadius: 20,
-    paddingHorizontal: 2,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: '#f2f2f2',
-  },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  suggestionIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#f7f7f7',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  suggestionTextBlock: {
-    flex: 1,
-    gap: 2,
-  },
-  suggestionTitle: {
-    color: '#171717',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  suggestionSubtitle: {
-    color: '#9b9b9b',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  suggestionActionIcon: {
-    transform: [{ rotate: '45deg' }],
-  },
-  suggestionDivider: {
-    height: 1,
-    backgroundColor: '#f1f1f1',
-    marginLeft: 60,
-    marginRight: 12,
-  },
-  addressList: {
-    gap: 0,
-  },
-  addressItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 11,
-  },
-  addressIconHome: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#fff8e1',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addressIconWork: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#e8f4fd',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addressTextBlock: {
-    flex: 1,
-    gap: 1,
-  },
-  addressLabel: {
-    color: '#171717',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  addressSub: {
-    color: '#aaaaaa',
-    fontSize: 12,
-    fontWeight: '400',
-  },
-  addressAddButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#eef2f6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addressPlusHorizontal: {
-    position: 'absolute',
-    width: 12,
-    height: 2,
-    borderRadius: 999,
-    backgroundColor: '#65707d',
-  },
-  addressPlusVertical: {
-    position: 'absolute',
-    width: 2,
-    height: 12,
-    borderRadius: 999,
-    backgroundColor: '#65707d',
-  },
-  addressText: {
-    color: '#171717',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  addressDivider: {
-    height: 1,
-    backgroundColor: '#f0f0f0',
-    marginLeft: 48,
-  },
-  // Service Cards
-  serviceRowHeader: {
-    fontSize: 20,
-    fontWeight: '800',
-    marginBottom: 12,
-    marginTop: 4,
-  },
-  serviceRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 16,
-  },
-  serviceCard: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 2,
-    borderColor: '#FFD000',
-    minHeight: 148,
-    justifyContent: 'center',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  serviceCardActive: {
-    backgroundColor: '#FFD000',
-    borderWidth: 0,
-    shadowColor: '#c8880a',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 12,
-  },
-  serviceCardDisabled: {
-    backgroundColor: '#fafafa',
-    borderColor: '#e8e8e8',
-    shadowOpacity: 0.04,
-    elevation: 1,
-    opacity: 0.6,
-  },
-  serviceCarImageWrap: {
-    width: 76,
-    height: 52,
-    marginBottom: 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  serviceCarImage: {
-    width: '100%',
-    height: '100%',
-  },
-  serviceDiscountPill: {
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  serviceDiscountPillActive: {
-    backgroundColor: 'rgba(0,0,0,0.14)',
-  },
-  serviceDiscountPillDisabled: {
-    backgroundColor: '#ececec',
-  },
-  serviceDiscountText: {
-    color: '#888888',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  serviceDiscountTextActive: {
-    color: '#000000',
-    fontWeight: '800',
-  },
-  serviceDiscountTextDisabled: {
-    color: '#aaaaaa',
-  },
-  serviceTitle: {
-    color: '#171717',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  serviceTitleActive: {
-    color: '#000000',
-    fontWeight: '900',
-  },
-  serviceTitleDisabled: {
-    color: '#aaaaaa',
-  },
-  serviceSubLabel: {
-    color: '#999999',
-    fontSize: 11,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  serviceSubLabelActive: {
-    color: '#1a1a1a',
-    fontWeight: '600',
-  },
-  serviceSubLabelDisabled: {
-    color: '#cccccc',
-  },
-  // Top Drivers Section
-  topDriversSection: {
-    marginBottom: 24,
-  },
-  topDriversHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  topDriversTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  topDriversSub: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  topDriversOverflow: {
-    overflow: 'hidden',
-    marginHorizontal: -20,
-    paddingHorizontal: 0,
-  },
-  topDriversScroll: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 20,
-  },
-  driverCard: {
-    width: 150,
-    borderRadius: 20,
-    padding: 16,
-    alignItems: 'center',
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.10,
-    shadowRadius: 10,
-    elevation: 5,
-    borderWidth: 1.5,
-    borderColor: 'rgba(0,0,0,0.05)',
-  },
-  driverAvatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
-  driverName: {
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  driverRatingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  driverRatingText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  driverTripsBadge: {
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  driverTripsText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  driverBookBtn: {
-    marginTop: 4,
-    backgroundColor: '#FFD000',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    width: '100%',
-    alignItems: 'center',
-  },
-  driverBookBtnText: {
-    color: '#000000',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  // Tab Bar Styles with Notch
-  tabBar: {
-    position: 'absolute',
-    bottom: 16,
-    left: 20,
-    right: 20,
-    height: 68,
-    borderRadius: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingBottom: 4,
-    zIndex: 6,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.82)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.6)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.10,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  tabItemCenter: {
-    flex: 1,
-  },
-  tabLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#aaaaaa',
-  },
-  tabLabelActive: {
-    color: '#1a1a1a',
-    fontWeight: '700',
-  },
-  // ── Tab full-screen panels ─────────────────────────────
-  tabScreen: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 4,
-  },
-  tabScreenHeader: {
-    paddingTop: 68,
-    paddingBottom: 15,
-    paddingHorizontal: 22,
-    borderBottomWidth: 1,
-    gap: 10,
-  },
-  tabScreenHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  tabSearchIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabSearchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 8,
-    borderWidth: 1,
-  },
-  tabSearchInput: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '500',
-    padding: 0,
-  },
-  tabScreenTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-  },
-  tabScreenContent: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
-    paddingBottom: 120,
-    gap: 6,
-  },
-  tabSectionLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-    marginTop: 12,
-    marginLeft: 4,
-  },
-  // Activity filter pills
-  activityFilterRow: {
-    marginBottom: 4,
-  },
-  activityFilterContent: {
-    gap: 8,
-    paddingBottom: 2,
-  },
-  activityFilterPill: {
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: '#FFD000',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  activityFilterPillActive: {
-    backgroundColor: '#FFD000',
-    borderWidth: 0,
-  },
-  activityFilterPillText: {
-    color: '#000000',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  activityFilterPillTextActive: {
-    color: '#000000',
-    fontWeight: '800',
-  },
-  activityGroupHeader: {
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 16,
-    marginBottom: 4,
-    marginLeft: 4,
-  },
-  activityItemEmoji: {
-    fontSize: 20,
-  },
-  activityCardContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 5,
-  },
-  activityCardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  activityCardTitle: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  activityCardSub: {
-    fontSize: 13,
-    fontWeight: '400',
-  },
-  activityEmpty: {
-    textAlign: 'center',
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 60,
-  },
-  // Ride Detail Modal
-  rideDetailOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  rideDetailSheet: {
-    width: '100%',
-    borderRadius: 28,
-    padding: 24,
-    alignItems: 'center',
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    elevation: 16,
-  },
-  rideDetailHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#ddd',
-    marginBottom: 8,
-  },
-  rideDetailIconWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  rideDetailRoute: {
-    fontSize: 16,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  rideDetailArrowRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    width: '60%',
-    marginVertical: 2,
-  },
-  rideDetailLine: {
-    flex: 1,
-    height: 1,
-  },
-  rideDetailDivider: {
-    height: 1,
-    width: '100%',
-    marginVertical: 12,
-  },
-  rideDetailMeta: {
-    width: '100%',
-    gap: 12,
-  },
-  rideDetailMetaItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  rideDetailMetaLabel: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  rideDetailMetaValue: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  rideDetailStars: {
-    flexDirection: 'row',
-    gap: 2,
-  },
-  rideDetailBookBtn: {
-    marginTop: 16,
-    backgroundColor: '#FFD000',
-    borderRadius: 16,
-    paddingVertical: 14,
-    width: '100%',
-    alignItems: 'center',
-  },
-  rideDetailBookBtnText: {
-    color: '#000000',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  tabCard: {
-    borderRadius: 18,
-    overflow: 'hidden',
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  tabDivider: {
-    height: 1,
-    marginHorizontal: 16,
-  },
-  // Ride history
-  rideHistoryItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 12,
-  },
-  rideHistoryIconWrap: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rideHistoryAvatarText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  rideHistoryBody: {
-    flex: 1,
-    gap: 2,
-  },
-  rideHistoryRoute: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  rideHistoryMeta: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  rideHistoryStars: {
-    flexDirection: 'row',
-    gap: 2,
-    marginTop: 2,
-  },
-  rideHistoryPrice: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  rideViewPill: {
-    borderRadius: 20,
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#FFB800',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  rideViewPillText: {
-    color: '#000000',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  // Favourites
-  favItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 12,
-  },
-  favIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  favBody: {
-    flex: 1,
-    gap: 2,
-  },
-  favTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  favSubtitle: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  // Settings
-  settingsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 15,
-    gap: 14,
-  },
-  settingsRowLabel: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  settingsRowRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  settingsRowValue: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  notifRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  notifRowLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  notifRowSub: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  settingsSignOut: {
-    marginTop: 20,
-    marginHorizontal: 0,
-    borderRadius: 18,
-    borderWidth: 1,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  settingsSignOutText: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  // Edit Profile screen (reference layout)
-  editProfileRoot: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  editProfileHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 56,
-    paddingHorizontal: 4,
-    paddingBottom: 12,
-    backgroundColor: '#ffffff',
-  },
-  editProfileHeaderSide: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  editProfileHeaderTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#171717',
-  },
-  editProfileScroll: {
-    flex: 1,
-  },
-  editProfileScrollContent: {
-    paddingHorizontal: 22,
-    paddingBottom: 40,
-    paddingTop: 4,
-  },
-  profileViewScrollContent: {
-    paddingHorizontal: 22,
-    paddingBottom: 40,
-    paddingTop: 4,
-  },
-  profileViewSectionHeadingWrap: {
-    marginBottom: 10,
-    marginTop: 4,
-  },
-  profilePaymentSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-    marginTop: 4,
-  },
-  profileViewSectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#888888',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  profileViewSectionTitleFlex: {
-    flex: 1,
-  },
-  profileAddCardIconBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileViewCard: {
-    backgroundColor: '#fafafa',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    marginBottom: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#eeeeee',
-  },
-  profileViewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    gap: 12,
-  },
-  profileViewRowTop: {
-    alignItems: 'flex-start',
-  },
-  profileViewLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#171717',
-    flexShrink: 0,
-    width: 100,
-  },
-  profileViewValue: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#555555',
-    textAlign: 'right',
-  },
-  profileViewValueMultiline: {
-    textAlign: 'right',
-  },
-  profileViewDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e8e8e8',
-  },
-  profilePaymentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 14,
-  },
-  profilePaymentCardIcon: {
-    width: 44,
-    height: 28,
-    borderRadius: 6,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profilePaymentVisa: {
-    backgroundColor: '#1a1f71',
-  },
-  profilePaymentMc: {
-    backgroundColor: '#eb001b',
-  },
-  profilePaymentCardIconText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  profilePaymentLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#171717',
-  },
-  profilePaymentSub: {
-    fontSize: 12,
-    color: '#888888',
-    marginTop: 2,
-  },
-  profilePaymentDefaultBadge: {
-    backgroundColor: '#fff8e1',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginRight: 4,
-  },
-  profilePaymentDefaultText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#b8860b',
-  },
-  resetPasswordButton: {
-    marginTop: 8,
-    marginBottom: 24,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: '#171717',
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  resetPasswordButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#171717',
-  },
-  signOutButton: {
-    marginBottom: 32,
-    borderRadius: 16,
-    backgroundColor: '#171717',
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  signOutButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  addCardKb: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  addCardScrollContent: {
-    flexGrow: 1,
-    justifyContent: 'flex-end',
-  },
-  addCardSheet: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 24,
-    paddingBottom: 36,
-    gap: 10,
-    maxHeight: '88%',
-  },
-  addCardPreview: {
-    alignSelf: 'center',
-    width: '92%',
-    maxWidth: 400,
-    aspectRatio: 1.586,
-    maxHeight: 200,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: '#ffffff',
-    marginBottom: 4,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addCardPreviewImage: {
-    width: '100%',
-    height: '100%',
-  },
-  addCardRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  addCardRowField: {
-    flex: 1,
-  },
-  editProfileAvatarWrap: {
-    alignSelf: 'center',
-    marginBottom: 28,
-    width: 120,
-    height: 120,
-    position: 'relative',
-  },
-  editProfileAvatarImage: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  editProfileAvatarCamera: {
-    position: 'absolute',
-    right: 2,
-    bottom: 2,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#ffffff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  editProfileField: {
-    marginBottom: 20,
-  },
-  editProfileHint: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: '#888888',
-    marginTop: 8,
-  },
-  editProfileLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#171717',
-    marginBottom: 8,
-  },
-  editProfileInput: {
-    backgroundColor: '#f0f0f0',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#4a4a4a',
-  },
-  editProfilePasswordRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 16,
-    paddingLeft: 16,
-    paddingRight: 4,
-  },
-  editProfilePasswordInput: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    paddingHorizontal: 0,
-    paddingVertical: 14,
-  },
-  editProfileEyeBtn: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  editProfilePhoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  editProfileCountryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
-  editProfileCountryText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#4a4a4a',
-  },
-  editProfilePhoneInput: {
-    flex: 1,
-  },
-  editProfilePickerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
-  editProfilePickerSheet: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 36,
-  },
-  editProfilePickerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#171717',
-    marginBottom: 8,
-  },
-  editProfilePickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f0f0f0',
-    gap: 12,
-  },
-  editProfilePickerCode: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#171717',
-    width: 56,
-  },
-  editProfilePickerLabel: {
-    flex: 1,
-    fontSize: 15,
-    color: '#666666',
-  },
-  fabHalo: {
-    display: 'none',
-    position: 'absolute',
-    bottom: 36,
-    left: '50%',
-    marginLeft: -34,
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: '#ffffff',
-    zIndex: 8,
-  },
-  floatingButton: { display: 'none', position: 'absolute', bottom: 0, width: 0, height: 0, zIndex: 0 },
-  plusButton: { width: 0, height: 0 },
-  plusHorizontal: { width: 0, height: 0 },
-  plusVertical: { width: 0, height: 0 },
-});
 
