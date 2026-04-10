@@ -23,6 +23,7 @@ import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
 import { authEnabled, firebaseApp, firebaseReady, missingFirebaseConfig } from '../../lib/firebase';
@@ -46,6 +47,23 @@ const mockRideHistory = [
   { id: 'r4', from: 'Downtown Kingston', to: 'New Kingston', date: 'Apr 6, 8:00 AM', price: '$6.80', driver: 'Sandra M.', rating: 4 },
   { id: 'r5', from: 'Constant Spring', to: 'Liguanea', date: 'Apr 5, 7:20 PM', price: '$4.90', driver: 'Devon P.', rating: 5 },
 ];
+
+const mockTopDrivers = [
+  { id: 'd1', name: 'Marcus Williams', trips: 14, rating: 4.9, initials: 'MW', color: '#4a90e2' },
+  { id: 'd2', name: 'Diana Reid', trips: 8, rating: 5.0, initials: 'DR', color: '#e2844a' },
+  { id: 'd3', name: 'Trevor Allen', trips: 11, rating: 4.8, initials: 'TA', color: '#52b788' },
+  { id: 'd4', name: 'Sandra Morris', trips: 6, rating: 4.7, initials: 'SM', color: '#9b72cf' },
+];
+
+const DRIVER_AVATAR_COLORS = ['#4a90e2', '#e2844a', '#52b788', '#9b72cf', '#e25c6a', '#3bbfa3'];
+function driverAvatar(name: string): { initials: string; color: string } {
+  const parts = name.trim().split(/\s+/);
+  const initials = parts.map(p => p[0]).join('').toUpperCase().slice(0, 2);
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
+  const color = DRIVER_AVATAR_COLORS[Math.abs(hash) % DRIVER_AVATAR_COLORS.length];
+  return { initials, color };
+}
 
 const mockFavouritePlaces = [
   { id: 'f1', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' as const },
@@ -416,6 +434,11 @@ export default function MainScreen() {
   usePushToken();
   const [selectedRide, setSelectedRide] = useState('ride');
   const [activeTab, setActiveTab] = useState('home');
+  const [activitySearch, setActivitySearch] = useState('');
+  const [activitySearchOpen, setActivitySearchOpen] = useState(false);
+  const [favSearch, setFavSearch] = useState('');
+  const [favSearchOpen, setFavSearchOpen] = useState(false);
+  const [selectedRideDetail, setSelectedRideDetail] = useState<typeof mockRideHistory[0] | null>(null);
   const [screen, setScreen] = useState<
     'home' | 'profile' | 'profileEdit' |
     'settingsNotifications' | 'settingsPassword' | 'settingsLanguage' |
@@ -1174,7 +1197,66 @@ export default function MainScreen() {
   const panValue = useRef(new Animated.Value(0)).current;
   const minimizedTranslateY = useRef(new Animated.Value(0)).current;
   const destinationLiftAnim = useRef(new Animated.Value(0)).current;
+  const driverPosAnim = useRef(new Animated.Value(0)).current;
+  const driverPosRef = useRef(0);
+  const driverRafRef = useRef<number | null>(null);
+  const driverDragStartPos = useRef(0);
   const scrollOffsetRef = useRef(0);
+
+  const DRIVER_CARD_WIDTH = 162;
+  const DRIVER_TOTAL = mockTopDrivers.length * DRIVER_CARD_WIDTH;
+
+  const stopDriverRaf = useCallback(() => {
+    if (driverRafRef.current !== null) {
+      cancelAnimationFrame(driverRafRef.current);
+      driverRafRef.current = null;
+    }
+  }, []);
+
+  const startDriverRaf = useCallback(() => {
+    stopDriverRaf();
+    const tick = () => {
+      driverPosRef.current -= 0.5;
+      if (driverPosRef.current <= -DRIVER_TOTAL) driverPosRef.current = 0;
+      driverPosAnim.setValue(driverPosRef.current);
+      driverRafRef.current = requestAnimationFrame(tick);
+    };
+    driverRafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const driverPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 4 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderGrant: () => {
+        stopDriverRaf();
+        driverDragStartPos.current = driverPosRef.current;
+      },
+      onPanResponderMove: (_, g) => {
+        let next = driverDragStartPos.current + g.dx;
+        if (next > 0) next = 0;
+        if (next < -DRIVER_TOTAL * 2) next = -DRIVER_TOTAL * 2;
+        driverPosRef.current = next;
+        driverPosAnim.setValue(next);
+      },
+      onPanResponderRelease: (_, g) => {
+        let pos = driverPosRef.current;
+        // add a bit of momentum
+        pos += g.vx * 80;
+        if (pos > 0) pos = 0;
+        if (pos <= -DRIVER_TOTAL) pos = pos % -DRIVER_TOTAL;
+        driverPosRef.current = pos;
+        driverPosAnim.setValue(pos);
+        setTimeout(startDriverRaf, 1500);
+      },
+      onPanResponderTerminationRequest: () => false,
+    })
+  ).current;
+
+  useEffect(() => {
+    startDriverRaf();
+    return stopDriverRaf;
+  }, []);
   const searchSuggestions: SearchSuggestion[] = [
     ...(homeAddress ? [{ id: 'saved-home', title: 'Home', subtitle: homeAddress, icon: 'home' as const }] : []),
     ...(workAddress ? [{ id: 'saved-work', title: 'Work', subtitle: workAddress, icon: 'briefcase' as const }] : []),
@@ -2202,7 +2284,7 @@ export default function MainScreen() {
       </Modal>
 
       {/* Header — floats over map, fades out when searching */}
-      <Animated.View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay, opacity: sheetBgOpacity }]} pointerEvents={searchExpanded ? 'none' : 'auto'}>
+      {activeTab === 'home' ? <Animated.View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay, opacity: sheetBgOpacity }]} pointerEvents={searchExpanded ? 'none' : 'auto'}>
         <View style={styles.headerRow}>
           <View style={styles.profileBlock}>
             <Pressable style={[styles.profileIconShell, { backgroundColor: ui.softBg }]} onPress={openProfile}>
@@ -2217,9 +2299,54 @@ export default function MainScreen() {
             <SupportIcon color={isDark ? ui.text : '#ffffff'} />
           </Pressable>
         </View>
-      </Animated.View>
+      </Animated.View> : null}
 
       {/* Profile Modal — replaced by full screen, block removed */}
+
+      {/* Ride Detail Modal */}
+      <Modal visible={selectedRideDetail !== null} animationType="fade" transparent statusBarTranslucent onRequestClose={() => setSelectedRideDetail(null)}>
+        <Pressable style={styles.rideDetailOverlay} onPress={() => setSelectedRideDetail(null)}>
+          <Pressable style={[styles.rideDetailSheet, { backgroundColor: ui.cardBg }]} onPress={() => {}}>
+            <View style={styles.rideDetailHandle} />
+            <View style={[styles.rideDetailIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
+              <Ionicons name="car" size={32} color={ui.text} />
+            </View>
+            <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{selectedRideDetail?.from}</Text>
+            <View style={styles.rideDetailArrowRow}>
+              <View style={[styles.rideDetailLine, { backgroundColor: ui.divider }]} />
+              <Ionicons name="arrow-down" size={16} color={ui.textMuted} />
+              <View style={[styles.rideDetailLine, { backgroundColor: ui.divider }]} />
+            </View>
+            <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{selectedRideDetail?.to}</Text>
+            <View style={[styles.rideDetailDivider, { backgroundColor: ui.divider }]} />
+            <View style={styles.rideDetailMeta}>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Driver</Text>
+                <Text style={[styles.rideDetailMetaValue, { color: ui.text }]}>{selectedRideDetail?.driver}</Text>
+              </View>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Date</Text>
+                <Text style={[styles.rideDetailMetaValue, { color: ui.text }]}>{selectedRideDetail?.date}</Text>
+              </View>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Fare</Text>
+                <Text style={[styles.rideDetailMetaValue, { color: ui.text }]}>{selectedRideDetail?.price}</Text>
+              </View>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Rating</Text>
+                <View style={styles.rideDetailStars}>
+                  {Array.from({ length: 5 }).map((_, s) => (
+                    <Ionicons key={s} name={s < (selectedRideDetail?.rating ?? 0) ? 'star' : 'star-outline'} size={14} color="#ffd54a" />
+                  ))}
+                </View>
+              </View>
+            </View>
+            <Pressable style={styles.rideDetailBookBtn} onPress={() => setSelectedRideDetail(null)}>
+              <Text style={styles.rideDetailBookBtnText}>Book Again</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Address Modal */}
       <Modal visible={addressModal !== null} animationType="slide" transparent statusBarTranslucent>
@@ -2470,6 +2597,7 @@ export default function MainScreen() {
         </View>
 
         {/* Service Type Cards */}
+        {!searchExpanded ? <Text style={[styles.serviceRowHeader, { color: ui.text }]}>Ready to ride?</Text> : null}
         {!searchExpanded ? <View style={styles.serviceRow}>
           {(
             [
@@ -2486,13 +2614,8 @@ export default function MainScreen() {
                 disabled={disabled}
                 style={[
                   styles.serviceCard,
-                  { backgroundColor: isDark ? '#1b1c20' : undefined, borderColor: isDark ? '#2b2b31' : undefined },
                   active && styles.serviceCardActive,
-                  active && isDark ? { borderColor: '#ffffff', borderWidth: 2.5 } : null,
                   disabled && styles.serviceCardDisabled,
-                  disabled && isDark
-                    ? { opacity: 0.88, backgroundColor: '#24262c', borderColor: '#3a3d45' }
-                    : null,
                 ]}
                 onPress={() => {
                   if (!disabled) setSelectedRide(id);
@@ -2501,33 +2624,53 @@ export default function MainScreen() {
                 <View style={styles.serviceCarImageWrap}>
                   <Image source={greyCarAsset} style={styles.serviceCarImage} resizeMode="contain" />
                 </View>
-                <View style={[styles.serviceDiscountPill, active && styles.serviceDiscountPillActive, disabled && styles.serviceDiscountPillDisabled, disabled && isDark ? { backgroundColor: '#2f3138' } : null]}>
-                  <Text style={[styles.serviceDiscountText, active && styles.serviceDiscountTextActive, disabled && styles.serviceDiscountTextDisabled, disabled && isDark ? { color: '#aeb3bf' } : null]}>
+                <View style={[styles.serviceDiscountPill, active && styles.serviceDiscountPillActive, disabled && styles.serviceDiscountPillDisabled]}>
+                  <Text style={[styles.serviceDiscountText, active && styles.serviceDiscountTextActive, disabled && styles.serviceDiscountTextDisabled]}>
                     {discount} OFF
                   </Text>
                 </View>
-                <Text style={[styles.serviceTitle, { color: isDark && !active ? ui.text : undefined }, active && styles.serviceTitleActive, disabled && styles.serviceTitleDisabled]}>{label}</Text>
-                <Text style={[styles.serviceSubLabel, { color: isDark && !active ? ui.textMuted : undefined }, active && styles.serviceSubLabelActive, disabled && styles.serviceSubLabelDisabled]}>{sub}</Text>
+                <Text style={[styles.serviceTitle, active && styles.serviceTitleActive, disabled && styles.serviceTitleDisabled]}>{label}</Text>
+                <Text style={[styles.serviceSubLabel, active && styles.serviceSubLabelActive, disabled && styles.serviceSubLabelDisabled]}>{sub}</Text>
               </Pressable>
             );
           })}
         </View> : null}
 
-        {/* Promotional Card */}
+        {/* Top Drivers */}
         {!searchExpanded ? (
-        <View style={[styles.promoCard, { backgroundColor: isDark ? '#151517' : undefined }]}>
-          <View style={styles.promoContent}>
-            <Text style={[styles.promoTitle, { color: isDark ? ui.text : undefined }]}>Invest today. Secure a{'\n'}healthy tomorrow &{'\n'}every day.</Text>
-            <Pressable style={styles.promoButton}>
-              <Text style={styles.promoButtonText}>Invest Now!</Text>
-            </Pressable>
+          <View style={styles.topDriversSection}>
+            <View style={styles.topDriversHeader}>
+              <Text style={[styles.topDriversTitle, { color: ui.text }]}>Your Top Drivers</Text>
+              <Text style={[styles.topDriversSub, { color: ui.textMuted }]}>Based on your rides</Text>
+            </View>
+            <View style={styles.topDriversOverflow} {...driverPanResponder.panHandlers}>
+              <Animated.View
+                style={[styles.topDriversScroll, { transform: [{ translateX: driverPosAnim }] }]}
+              >
+                {[...mockTopDrivers, ...mockTopDrivers].map((driver, i) => (
+                  <View
+                    key={`${driver.id}-${i}`}
+                    style={[styles.driverCard, { backgroundColor: isDark ? '#1b1c20' : '#ffffff' }]}
+                  >
+                    <View style={[styles.driverAvatar, { backgroundColor: driver.color }]}>
+                      <Ionicons name="person" size={34} color="#ffffff" />
+                    </View>
+                    <Text style={[styles.driverName, { color: ui.text }]} numberOfLines={1}>{driver.name}</Text>
+                    <View style={styles.driverRatingRow}>
+                      <Ionicons name="star" size={13} color="#FFD000" />
+                      <Text style={[styles.driverRatingText, { color: ui.text }]}>{driver.rating.toFixed(1)}</Text>
+                    </View>
+                    <View style={[styles.driverTripsBadge, { backgroundColor: isDark ? '#2b2b31' : '#f5f5f5' }]}>
+                      <Text style={[styles.driverTripsText, { color: ui.textMuted }]}>{driver.trips} trips</Text>
+                    </View>
+                    <Pressable style={styles.driverBookBtn}>
+                      <Text style={styles.driverBookBtnText}>Book Again</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </Animated.View>
+            </View>
           </View>
-          <View style={styles.promoIllustration}>
-            <View style={styles.promoBox1} />
-            <View style={styles.promoBox2} />
-            <View style={styles.promoBox3} />
-          </View>
-        </View>
         ) : null}
       </ScrollView>
       </Animated.View>
@@ -2536,14 +2679,38 @@ export default function MainScreen() {
       {activeTab === 'activity' ? (
         <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
           <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
-            <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Activity</Text>
+            <View style={styles.tabScreenHeaderRow}>
+              <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Activity</Text>
+              <Pressable
+                style={[styles.tabSearchIconBtn, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}
+                onPress={() => { setActivitySearchOpen(v => !v); setActivitySearch(''); }}
+              >
+                <Ionicons name={activitySearchOpen ? 'close' : 'search'} size={18} color={ui.text} />
+              </Pressable>
+            </View>
+            {activitySearchOpen ? (
+              <View style={[styles.tabSearchBar, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0', borderColor: ui.divider }]}>
+                <Ionicons name="search" size={15} color={ui.textMuted} />
+                <TextInput
+                  style={[styles.tabSearchInput, { color: ui.text }]}
+                  value={activitySearch}
+                  onChangeText={setActivitySearch}
+                  placeholder="Search rides..."
+                  placeholderTextColor={ui.placeholder}
+                  autoFocus
+                  autoCorrect={false}
+                />
+              </View>
+            ) : null}
           </View>
           <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
-            {mockRideHistory.map((ride, i) => (
-              <View key={ride.id}>
-                <View style={[styles.rideHistoryItem, { backgroundColor: ui.cardBg }]}>
-                  <View style={[styles.rideHistoryIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
-                    <Ionicons name="car" size={20} color={ui.text} />
+            {mockRideHistory
+              .filter(ride => !activitySearch.trim() || [ride.from, ride.to, ride.driver].some(s => s.toLowerCase().includes(activitySearch.toLowerCase())))
+              .map((ride, i, arr) => (
+              <View key={ride.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+                <Pressable style={styles.rideHistoryItem} onPress={() => setSelectedRideDetail(ride)}>
+                  <View style={[styles.rideHistoryIconWrap, { backgroundColor: driverAvatar(ride.driver).color }]}>
+                    <Text style={styles.rideHistoryAvatarText}>{driverAvatar(ride.driver).initials}</Text>
                   </View>
                   <View style={styles.rideHistoryBody}>
                     <Text style={[styles.rideHistoryRoute, { color: ui.text }]} numberOfLines={1}>
@@ -2556,9 +2723,15 @@ export default function MainScreen() {
                       ))}
                     </View>
                   </View>
-                  <Text style={[styles.rideHistoryPrice, { color: ui.text }]}>{ride.price}</Text>
-                </View>
-                {i < mockRideHistory.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
+                  <LinearGradient
+                    colors={['#FFE033', '#FFB800']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.rideViewPill}
+                  >
+                    <Text style={styles.rideViewPillText}>View</Text>
+                  </LinearGradient>
+                </Pressable>
               </View>
             ))}
           </ScrollView>
@@ -2569,13 +2742,36 @@ export default function MainScreen() {
       {activeTab === 'notifications' ? (
         <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
           <View style={[styles.tabScreenHeader, { backgroundColor: ui.panelBg, borderBottomColor: ui.divider }]}>
-            <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Favourites</Text>
+            <View style={styles.tabScreenHeaderRow}>
+              <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Favourites</Text>
+              <Pressable
+                style={[styles.tabSearchIconBtn, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}
+                onPress={() => { setFavSearchOpen(v => !v); setFavSearch(''); }}
+              >
+                <Ionicons name={favSearchOpen ? 'close' : 'search'} size={18} color={ui.text} />
+              </Pressable>
+            </View>
+            {favSearchOpen ? (
+              <View style={[styles.tabSearchBar, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0', borderColor: ui.divider }]}>
+                <Ionicons name="search" size={15} color={ui.textMuted} />
+                <TextInput
+                  style={[styles.tabSearchInput, { color: ui.text }]}
+                  value={favSearch}
+                  onChangeText={setFavSearch}
+                  placeholder="Search places..."
+                  placeholderTextColor={ui.placeholder}
+                  autoFocus
+                  autoCorrect={false}
+                />
+              </View>
+            ) : null}
           </View>
           <ScrollView contentContainerStyle={styles.tabScreenContent} showsVerticalScrollIndicator={false}>
             <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Saved places</Text>
-            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-              {mockFavouritePlaces.map((place, i) => (
-                <View key={place.id}>
+              {mockFavouritePlaces
+                .filter(p => !favSearch.trim() || [p.title, p.subtitle].some(s => s.toLowerCase().includes(favSearch.toLowerCase())))
+                .map((place) => (
+                <View key={place.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
                   <View style={styles.favItem}>
                     <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
                       <Ionicons name={place.icon} size={18} color={ui.text} />
@@ -2586,18 +2782,15 @@ export default function MainScreen() {
                     </View>
                     <Ionicons name="heart" size={18} color="#ef4444" />
                   </View>
-                  {i < mockFavouritePlaces.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
                 </View>
               ))}
-            </View>
 
             <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Frequent routes</Text>
-            <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
               {[
                 { from: 'Half-Way Tree', to: 'Norman Manley Airport', count: 6 },
                 { from: 'New Kingston', to: 'Portmore Mall', count: 3 },
-              ].map((route, i, arr) => (
-                <View key={i}>
+              ].map((route, i) => (
+                <View key={i} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
                   <View style={styles.favItem}>
                     <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
                       <Ionicons name="repeat" size={18} color={ui.text} />
@@ -2608,10 +2801,8 @@ export default function MainScreen() {
                     </View>
                     <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
                   </View>
-                  {i < arr.length - 1 ? <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} /> : null}
                 </View>
               ))}
-            </View>
           </ScrollView>
         </View>
       ) : null}
@@ -3523,6 +3714,12 @@ const styles = StyleSheet.create({
     marginLeft: 48,
   },
   // Service Cards
+  serviceRowHeader: {
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 12,
+    marginTop: 4,
+  },
   serviceRow: {
     flexDirection: 'row',
     gap: 10,
@@ -3531,24 +3728,37 @@ const styles = StyleSheet.create({
   serviceCard: {
     flex: 1,
     backgroundColor: '#ffffff',
-    borderRadius: 20,
+    borderRadius: 18,
     paddingVertical: 14,
     paddingHorizontal: 8,
     alignItems: 'center',
     gap: 6,
     borderWidth: 2,
-    borderColor: '#ececec',
+    borderColor: '#FFD000',
     minHeight: 148,
     justifyContent: 'center',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   serviceCardActive: {
-    backgroundColor: '#171717',
-    borderColor: '#171717',
+    backgroundColor: '#FFD000',
+    borderWidth: 0,
+    shadowColor: '#c8880a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 12,
   },
   serviceCardDisabled: {
-    opacity: 0.55,
-    borderColor: '#e8e8e8',
     backgroundColor: '#fafafa',
+    borderColor: '#e8e8e8',
+    shadowOpacity: 0.04,
+    elevation: 1,
+    opacity: 0.6,
   },
   serviceCarImageWrap: {
     width: 76,
@@ -3562,27 +3772,28 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   serviceDiscountPill: {
-    backgroundColor: '#f0f4f8',
+    backgroundColor: '#f0f0f0',
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   serviceDiscountPillActive: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: 'rgba(0,0,0,0.14)',
   },
   serviceDiscountPillDisabled: {
     backgroundColor: '#ececec',
   },
   serviceDiscountText: {
-    color: '#666666',
+    color: '#888888',
     fontSize: 10,
     fontWeight: '700',
   },
   serviceDiscountTextActive: {
-    color: '#ffd54a',
+    color: '#000000',
+    fontWeight: '800',
   },
   serviceDiscountTextDisabled: {
-    color: '#b0b0b0',
+    color: '#aaaaaa',
   },
   serviceTitle: {
     color: '#171717',
@@ -3590,10 +3801,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   serviceTitleActive: {
-    color: '#ffffff',
+    color: '#000000',
+    fontWeight: '900',
   },
   serviceTitleDisabled: {
-    color: '#b0b0b0',
+    color: '#aaaaaa',
   },
   serviceSubLabel: {
     color: '#999999',
@@ -3602,76 +3814,98 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   serviceSubLabelActive: {
-    color: 'rgba(255,255,255,0.6)',
+    color: '#1a1a1a',
+    fontWeight: '600',
   },
   serviceSubLabelDisabled: {
-    color: '#c8c8c8',
+    color: '#cccccc',
   },
-  // Promotional Card
-  promoCard: {
-    backgroundColor: '#f0f8ff',
-    borderRadius: 24,
-    padding: 20,
+  // Top Drivers Section
+  topDriversSection: {
+    marginBottom: 24,
+  },
+  topDriversHeader: {
     flexDirection: 'row',
-    gap: 16,
-    marginBottom: 16,
-  },
-  promoContent: {
-    flex: 1,
-    gap: 12,
+    alignItems: 'baseline',
     justifyContent: 'space-between',
+    marginBottom: 14,
   },
-  promoTitle: {
-    color: '#171717',
-    fontSize: 16,
-    fontWeight: '700',
-    lineHeight: 22,
+  topDriversTitle: {
+    fontSize: 20,
+    fontWeight: '800',
   },
-  promoButton: {
-    backgroundColor: '#4a90e2',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    alignSelf: 'flex-start',
+  topDriversSub: {
+    fontSize: 12,
+    fontWeight: '500',
   },
-  promoButtonText: {
-    color: '#ffffff',
+  topDriversOverflow: {
+    overflow: 'hidden',
+    marginHorizontal: -20,
+    paddingHorizontal: 0,
+  },
+  topDriversScroll: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+  },
+  driverCard: {
+    width: 150,
+    borderRadius: 20,
+    padding: 16,
+    alignItems: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.10,
+    shadowRadius: 10,
+    elevation: 5,
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,0,0,0.05)',
+  },
+  driverAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  driverName: {
     fontSize: 14,
     fontWeight: '700',
+    textAlign: 'center',
   },
-  promoIllustration: {
-    width: 80,
-    height: 80,
-    position: 'relative',
-    justifyContent: 'flex-end',
+  driverRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  driverRatingText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  driverTripsBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  driverTripsText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  driverBookBtn: {
+    marginTop: 4,
+    backgroundColor: '#FFD000',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    width: '100%',
     alignItems: 'center',
   },
-  promoBox1: {
-    position: 'absolute',
-    bottom: 0,
-    left: 10,
-    width: 24,
-    height: 32,
-    backgroundColor: '#4a90e2',
-    borderRadius: 4,
-  },
-  promoBox2: {
-    position: 'absolute',
-    bottom: 0,
-    left: 38,
-    width: 24,
-    height: 48,
-    backgroundColor: '#5da3f0',
-    borderRadius: 4,
-  },
-  promoBox3: {
-    position: 'absolute',
-    bottom: 0,
-    right: 10,
-    width: 24,
-    height: 64,
-    backgroundColor: '#70b6ff',
-    borderRadius: 4,
+  driverBookBtnText: {
+    color: '#000000',
+    fontSize: 12,
+    fontWeight: '800',
   },
   // Tab Bar Styles with Notch
   tabBar: {
@@ -3724,10 +3958,38 @@ const styles = StyleSheet.create({
     zIndex: 4,
   },
   tabScreenHeader: {
-    paddingTop: 135,
-    paddingBottom: 14,
+    paddingTop: 68,
+    paddingBottom: 15,
     paddingHorizontal: 22,
     borderBottomWidth: 1,
+    gap: 10,
+  },
+  tabScreenHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  tabSearchIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+    borderWidth: 1,
+  },
+  tabSearchInput: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    padding: 0,
   },
   tabScreenTitle: {
     fontSize: 26,
@@ -3749,6 +4011,96 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginLeft: 4,
   },
+  // Ride Detail Modal
+  rideDetailOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  rideDetailSheet: {
+    width: '100%',
+    borderRadius: 28,
+    padding: 24,
+    alignItems: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    elevation: 16,
+  },
+  rideDetailHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#ddd',
+    marginBottom: 8,
+  },
+  rideDetailIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  rideDetailRoute: {
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  rideDetailArrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    width: '60%',
+    marginVertical: 2,
+  },
+  rideDetailLine: {
+    flex: 1,
+    height: 1,
+  },
+  rideDetailDivider: {
+    height: 1,
+    width: '100%',
+    marginVertical: 12,
+  },
+  rideDetailMeta: {
+    width: '100%',
+    gap: 12,
+  },
+  rideDetailMetaItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  rideDetailMetaLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  rideDetailMetaValue: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  rideDetailStars: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  rideDetailBookBtn: {
+    marginTop: 16,
+    backgroundColor: '#FFD000',
+    borderRadius: 16,
+    paddingVertical: 14,
+    width: '100%',
+    alignItems: 'center',
+  },
+  rideDetailBookBtnText: {
+    color: '#000000',
+    fontSize: 15,
+    fontWeight: '800',
+  },
   tabCard: {
     borderRadius: 18,
     borderWidth: 1,
@@ -3768,11 +4120,17 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   rideHistoryIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  rideHistoryAvatarText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   rideHistoryBody: {
     flex: 1,
@@ -3794,6 +4152,24 @@ const styles = StyleSheet.create({
   rideHistoryPrice: {
     fontSize: 14,
     fontWeight: '700',
+  },
+  rideViewPill: {
+    borderRadius: 20,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#FFB800',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  rideViewPillText: {
+    color: '#000000',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   // Favourites
   favItem: {
