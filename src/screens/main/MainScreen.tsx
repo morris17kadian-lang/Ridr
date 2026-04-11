@@ -631,7 +631,8 @@ export default function MainScreen() {
   const [bookingFor, setBookingFor] = useState<'self' | 'friend'>('self');
   const [selectedPaymentLabel, setSelectedPaymentLabel] = useState<'Card' | 'Cash'>('Card');
   const [findingDriverVisible, setFindingDriverVisible] = useState(false);
-  const [findingDriverPhase, setFindingDriverPhase] = useState<'searching' | 'readySwipe' | 'no_driver_found'>('searching');
+  const [findingDriverPhase, setFindingDriverPhase] = useState<'searching' | 'readySwipe' | 'no_driver_found' | 'zooming'>('searching');
+  const [nearbyDriverSpots, setNearbyDriverSpots] = useState<LatLng[]>([]);
   const [activeTrip, setActiveTrip] = useState<ActiveTripState | null>(null);
   const [bookedRides, setBookedRides] = useState<BookedRideRecord[]>([]);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -643,7 +644,6 @@ export default function MainScreen() {
   const destinationFocusedRef = useRef(false);
   const toBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destinationBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const noDriversNearbyDialogShownRef = useRef(false);
 
   // Support modal
   const [supportVisible, setSupportVisible] = useState(false);
@@ -1596,7 +1596,6 @@ export default function MainScreen() {
       Alert.alert('Route required', 'Could not determine pickup and drop-off points.');
       return;
     }
-    noDriversNearbyDialogShownRef.current = false;
     setBookingFor(forWhom);
     setFindingDriverPhase('searching');
     setFindingDriverVisible(true);
@@ -1704,6 +1703,7 @@ export default function MainScreen() {
     }
   };
   const closeFindingDriver = useCallback(() => {
+    setNearbyDriverSpots([]);
     setFindingDriverVisible(false);
     setFindingDriverPhase('searching');
     setBookingFor('self');
@@ -1714,9 +1714,30 @@ export default function MainScreen() {
     setSelectedPaymentLabel(canCard ? 'Card' : 'Cash');
   }, [cards, defaultCard]);
   const retryFindingDriver = () => {
-    noDriversNearbyDialogShownRef.current = false;
+    setNearbyDriverSpots([]);
     setFindingDriverPhase('searching');
   };
+
+  // When zooming phase starts: fit map to show driver spots, then transition to readySwipe
+  useEffect(() => {
+    if (findingDriverPhase !== 'zooming' || !pickupCoordinate) return;
+    const allCoords = nearbyDriverSpots.length > 0
+      ? [...nearbyDriverSpots, pickupCoordinate]
+      : [pickupCoordinate];
+    const rafId = requestAnimationFrame(() => {
+      try {
+        mapViewRef.current?.fitToCoordinates(allCoords, {
+          edgePadding: { top: 130, right: 60, bottom: 240, left: 60 },
+          animated: true,
+        });
+      } catch { /* ignore */ }
+    });
+    const t = setTimeout(() => setFindingDriverPhase('readySwipe'), 2200);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t);
+    };
+  }, [findingDriverPhase]);
 
   useEffect(() => {
     if (!findingDriverVisible || findingDriverPhase !== 'searching' || !pickupCoordinate) return;
@@ -1724,6 +1745,27 @@ export default function MainScreen() {
     let cancelled = false;
     const runNearbyCheck = async () => {
       if (cancelled) return;
+
+      // ── DEV: always simulate 4 nearby drivers after a short delay ──
+      if (__DEV__) {
+        await new Promise<void>((r) => setTimeout(r, 1800));
+        if (cancelled) return;
+        const devOffsets = [
+          { lat: 0.003, lng: 0.004 },
+          { lat: -0.004, lng: 0.002 },
+          { lat: 0.001, lng: -0.005 },
+          { lat: -0.003, lng: -0.003 },
+        ];
+        setNearbyDriverSpots(
+          devOffsets.map((o) => ({
+            latitude: pickupCoordinate.latitude + o.lat,
+            longitude: pickupCoordinate.longitude + o.lng,
+          }))
+        );
+        setFindingDriverPhase('zooming');
+        return;
+      }
+
       try {
         const raw = await getNearbyDrivers({
           lat: pickupCoordinate.latitude,
@@ -1734,19 +1776,27 @@ export default function MainScreen() {
         const n = countDriversInNearbyResponse(raw);
         if (n === null) return;
         if (n > 0) {
-          setFindingDriverPhase('readySwipe');
+          // Generate simulated spots around pickup (API returns count only, not positions)
+          const driverCount = Math.min(n, 4);
+          const offsets = [
+            { lat: 0.003, lng: 0.004 },
+            { lat: -0.004, lng: 0.002 },
+            { lat: 0.001, lng: -0.005 },
+            { lat: -0.003, lng: -0.003 },
+          ];
+          if (pickupCoordinate) {
+            setNearbyDriverSpots(
+              offsets.slice(0, driverCount).map((o) => ({
+                latitude: pickupCoordinate.latitude + o.lat,
+                longitude: pickupCoordinate.longitude + o.lng,
+              }))
+            );
+          }
+          setFindingDriverPhase('zooming');
           return;
         }
-        if (n === 0 && !noDriversNearbyDialogShownRef.current) {
-          noDriversNearbyDialogShownRef.current = true;
-          Alert.alert(
-            'No drivers nearby',
-            'No drivers found in your area. Keep searching?',
-            [
-              { text: 'No', style: 'cancel', onPress: () => closeFindingDriver() },
-              { text: 'Yes', style: 'default', onPress: () => {} },
-            ]
-          );
+        if (n === 0) {
+          // No drivers found — modal countdown will auto-retry
         }
       } catch {
         /* signed out, network, or API error — do not block matching */
@@ -2632,9 +2682,19 @@ export default function MainScreen() {
       <View key={ANIMATION_TREE_KEY} style={[styles.safeArea, { backgroundColor: ui.screenBg }]}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} translucent={Platform.OS === 'android'} />
 
+      {findingDriverVisible && findingDriverPhase === 'zooming' ? (
+        <View style={styles.driverFoundPill} pointerEvents="none">
+          <Ionicons name="car" size={16} color="#FFD000" />
+          <Text style={styles.driverFoundPillText}>
+            {nearbyDriverSpots.length} driver{nearbyDriverSpots.length !== 1 ? 's' : ''} found nearby
+          </Text>
+          <ActivityIndicator size="small" color="#FFD000" />
+        </View>
+      ) : null}
+
       <FindingDriverModal
-        visible={findingDriverVisible}
-        phase={findingDriverPhase}
+        visible={findingDriverVisible && findingDriverPhase !== 'zooming'}
+        phase={findingDriverPhase === 'zooming' ? 'searching' : findingDriverPhase}
         ui={ui}
         isDark={isDark}
         fromLabel={toQuery.trim()}
@@ -2790,6 +2850,13 @@ export default function MainScreen() {
               ) : null}
             </>
           )}
+          {nearbyDriverSpots.map((coord, i) => (
+            <Marker key={`nearby-driver-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={styles.mapMarkerNearbyDriver}>
+                <Ionicons name="car" size={11} color="#FFD000" />
+              </View>
+            </Marker>
+          ))}
         </MapView>
         </View>
       </Animated.View>

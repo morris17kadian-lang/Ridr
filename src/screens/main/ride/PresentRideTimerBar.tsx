@@ -51,7 +51,7 @@ export function PresentRideTimerBar({ trip, ui, onPress }: Props) {
       <View style={styles.pill}>
         <Text style={styles.pillText}>{etaLabel}</Text>
       </View>
-      <Ionicons name="chevron-down" size={18} color="#ffffff" />
+      <Ionicons name="chevron-up" size={18} color="#ffffff" />
     </Pressable>
   );
 }

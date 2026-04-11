@@ -20,6 +20,80 @@ const TRACK_H = 68;
 const H_PADDING = 20;
 const ACCENT = '#FFD000';
 
+const RETRY_SECS = 10;
+
+function RetryCountdown({ onRetry, ui }: { onRetry: () => void; ui: MainScreenUi }) {
+  const [sec, setSec] = useState(RETRY_SECS);
+  const animWidth = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    // Animate bar from full → empty over RETRY_SECS
+    Animated.timing(animWidth, {
+      toValue: 0,
+      duration: RETRY_SECS * 1000,
+      useNativeDriver: false,
+    }).start();
+
+    const tick = setInterval(() => {
+      setSec((s) => {
+        if (s <= 1) {
+          clearInterval(tick);
+          onRetry();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(tick);
+  }, []);
+
+  return (
+    <View style={retryCountdownStyles.wrap}>
+      <Text style={[retryCountdownStyles.label, { color: ui.textMuted }]}>
+        Trying again in {sec}s…
+      </Text>
+      <View style={[retryCountdownStyles.track, { backgroundColor: ui.divider }]}>
+        <Animated.View
+          style={[
+            retryCountdownStyles.fill,
+            {
+              width: animWidth.interpolate({
+                inputRange: [0, 1],
+                outputRange: ['0%', '100%'],
+              }),
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+}
+
+const retryCountdownStyles = StyleSheet.create({
+  wrap: {
+    width: '100%',
+    marginTop: 16,
+    gap: 8,
+    alignItems: 'center',
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  track: {
+    width: '100%',
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  fill: {
+    height: '100%',
+    backgroundColor: '#ef4444',
+    borderRadius: 2,
+  },
+});
+
 export type DriverInfo = {
   name: string;
   carDetails: string;
@@ -28,7 +102,7 @@ export type DriverInfo = {
   etaLabel: string;
 };
 
-type Phase = 'searching' | 'readySwipe' | 'no_driver_found';
+type Phase = 'searching' | 'readySwipe' | 'no_driver_found' | 'zooming';
 
 type Props = {
   visible: boolean;
@@ -481,10 +555,7 @@ export function FindingDriverModal({
               </View>
               <Text style={[styles.loadingHeading, { color: ui.text }]}>No drivers available</Text>
               <Text style={[styles.loadingSub, { color: ui.textMuted }]}>No drivers found nearby right now.</Text>
-              <Pressable style={[styles.retryBtn, { backgroundColor: ui.text }]} onPress={onRetry}>
-                <Ionicons name="refresh" size={16} color={ui.screenBg} />
-                <Text style={[styles.retryBtnText, { color: ui.screenBg }]}>Try again</Text>
-              </Pressable>
+              <RetryCountdown key={String(visible)} onRetry={onRetry} ui={ui} />
             </View>
           ) : (
             <>

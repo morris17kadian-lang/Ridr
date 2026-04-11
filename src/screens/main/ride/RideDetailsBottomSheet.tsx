@@ -245,6 +245,7 @@ const styles = StyleSheet.create({
   vehicleLeft: {
     flex: 1,
     gap: 4,
+    paddingLeft: 28,
   },
   plateNumber: {
     fontSize: 22,
