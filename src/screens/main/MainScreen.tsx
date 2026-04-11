@@ -64,6 +64,7 @@ import {
 import {
   PROFILE_HEADER_ICON_GLYPH,
 } from './mainScreenLayoutConstants';
+import { GOOGLE_MAP_STYLE_DARK, GOOGLE_MAP_STYLE_LIGHT } from './map/googleMapStyles';
 import { styles } from './styles/mainScreenStyles';
 import { ActivityTabScreen } from './tabs/ActivityTabScreen';
 import { FavouritesTabScreen } from './tabs/FavouritesTabScreen';
@@ -323,6 +324,14 @@ const destinationSuggestions = [
 
 // Default centre: Kingston, Jamaica
 const JAMAICA_KINGSTON = { latitude: 17.9970, longitude: -76.7936 };
+
+/** Pitched camera so 3D extruded buildings show (tilt with two fingers to adjust). Uses Google Maps on both platforms. */
+const MAP_INITIAL_3D_CAMERA = {
+  center: JAMAICA_KINGSTON,
+  heading: 0,
+  pitch: 52,
+  zoom: 17,
+};
 
 function decodeGooglePolyline(encoded: string): LatLng[] {
   const points: LatLng[] = [];
@@ -1428,6 +1437,58 @@ export default function MainScreen() {
     }),
     [colors]
   );
+
+  const googleMapCustomStyle = useMemo(
+    () => (isDark ? GOOGLE_MAP_STYLE_DARK : GOOGLE_MAP_STYLE_LIGHT),
+    [isDark]
+  );
+
+  const mapRouteStroke = useMemo(
+    () => ({
+      outer: isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.95)',
+      inner: isDark ? colors.accent : colors.text,
+    }),
+    [isDark, colors.accent, colors.text]
+  );
+
+  const mapMarkerStyles = useMemo(
+    () => ({
+      pickup: [
+        styles.mapMarkerPickup,
+        {
+          backgroundColor: isDark ? colors.accent : '#171717',
+          borderColor: isDark ? colors.background : colors.accent,
+        },
+      ],
+      dropoff: [
+        styles.mapMarkerDropoff,
+        {
+          backgroundColor: isDark ? colors.background : colors.accent,
+          borderColor: isDark ? colors.accent : colors.text,
+        },
+      ],
+      nearbyDriver: [
+        styles.mapMarkerNearbyDriver,
+        {
+          backgroundColor: isDark ? colors.card : '#171717',
+          borderColor: colors.accent,
+        },
+      ],
+      routeAnimatorOuter: [
+        styles.routeAnimatorOuter,
+        {
+          backgroundColor: isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.95)',
+          borderColor: isDark ? colors.accent : '#171717',
+        },
+      ],
+      routeAnimatorInner: [
+        styles.routeAnimatorInner,
+        { backgroundColor: isDark ? colors.accent : '#171717' },
+      ],
+    }),
+    [isDark, colors.accent, colors.background, colors.card, colors.text]
+  );
+
   const estimatedFareUsd = useMemo(
     () => estimateFareUsd(routeDistanceM, routeDurationSec),
     [routeDistanceM, routeDurationSec]
@@ -2713,12 +2774,22 @@ export default function MainScreen() {
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} translucent={Platform.OS === 'android'} />
 
       {findingDriverVisible && findingDriverPhase === 'zooming' ? (
-        <View style={styles.driverFoundPill} pointerEvents="none">
-          <Ionicons name="car" size={16} color="#FFD000" />
-          <Text style={styles.driverFoundPillText}>
+        <View
+          style={[
+            styles.driverFoundPill,
+            {
+              backgroundColor: isDark ? ui.cardBg : '#171717',
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: ui.divider,
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons name="car" size={16} color={ui.accent} />
+          <Text style={[styles.driverFoundPillText, { color: ui.text }]}>
             {nearbyDriverSpots.length} driver{nearbyDriverSpots.length !== 1 ? 's' : ''} found nearby
           </Text>
-          <ActivityIndicator size="small" color="#FFD000" />
+          <ActivityIndicator size="small" color={ui.accent} />
         </View>
       ) : null}
 
@@ -2763,11 +2834,11 @@ export default function MainScreen() {
       />
 
       {/* Map: short when sheet is up, full window when sheet is minimized */}
-      <Animated.View style={[styles.mapWrapper, { height: minimizedMapH }]}>
+      <Animated.View style={[styles.mapWrapper, { height: minimizedMapH, backgroundColor: colors.background }]}>
         <View ref={mapMeasureRef} style={StyleSheet.absoluteFillObject} collapsable={false}>
         <MapView
           ref={mapViewRef}
-          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+          provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           onPress={() => {
             setMapLocationAction(null);
@@ -2821,45 +2892,46 @@ export default function MainScreen() {
                 : prev
             );
           }}
-          initialRegion={{
-            latitude: JAMAICA_KINGSTON.latitude,
-            longitude: JAMAICA_KINGSTON.longitude,
-            latitudeDelta: 0.018,
-            longitudeDelta: 0.018,
-          }}
+          initialCamera={MAP_INITIAL_3D_CAMERA}
+          mapType="standard"
+          customMapStyle={googleMapCustomStyle}
+          loadingBackgroundColor={colors.background}
           showsUserLocation={false}
           showsMyLocationButton={false}
           showsCompass={false}
           toolbarEnabled={false}
           rotateEnabled={true}
           pitchEnabled={true}
+          {...(Platform.OS === 'android'
+            ? { showsBuildings: true, googleRenderer: 'LATEST' as const }
+            : {})}
         >
           {hasRoute ? (
             <>
               <Polyline
                 coordinates={roadRouteCoords}
-                strokeColor="rgba(255,255,255,0.95)"
+                strokeColor={mapRouteStroke.outer}
                 strokeWidth={9}
                 lineCap="round"
                 lineJoin="round"
               />
               <Polyline
                 coordinates={roadRouteCoords}
-                strokeColor="#171717"
+                strokeColor={mapRouteStroke.inner}
                 strokeWidth={6}
                 lineCap="round"
                 lineJoin="round"
               />
               <Marker coordinate={pickupCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={styles.mapMarkerPickup} />
+                <View style={mapMarkerStyles.pickup} />
               </Marker>
               <Marker coordinate={dropoffCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={styles.mapMarkerDropoff} />
+                <View style={mapMarkerStyles.dropoff} />
               </Marker>
               {routeAnimatorPoint ? (
                 <Marker coordinate={routeAnimatorPoint} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={styles.routeAnimatorOuter}>
-                    <View style={styles.routeAnimatorInner} />
+                  <View style={mapMarkerStyles.routeAnimatorOuter}>
+                    <View style={mapMarkerStyles.routeAnimatorInner} />
                   </View>
                 </Marker>
               ) : null}
@@ -2868,25 +2940,25 @@ export default function MainScreen() {
             <>
               {showCurrentLocationPin ? (
                 <Marker coordinate={userLocation!} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={styles.mapMarkerPickup} />
+                  <View style={mapMarkerStyles.pickup} />
                 </Marker>
               ) : null}
               {showOriginTextPin ? (
                 <Marker coordinate={originPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={styles.mapMarkerPickup} />
+                  <View style={mapMarkerStyles.pickup} />
                 </Marker>
               ) : null}
               {showDestPreviewPin ? (
                 <Marker coordinate={destinationPreviewCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={styles.mapMarkerDropoff} />
+                  <View style={mapMarkerStyles.dropoff} />
                 </Marker>
               ) : null}
             </>
           )}
           {nearbyDriverSpots.map((coord, i) => (
             <Marker key={`nearby-driver-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.mapMarkerNearbyDriver}>
-                <Ionicons name="car" size={11} color="#FFD000" />
+              <View style={mapMarkerStyles.nearbyDriver}>
+                <Ionicons name="car" size={11} color={colors.accent} />
               </View>
             </Marker>
           ))}
