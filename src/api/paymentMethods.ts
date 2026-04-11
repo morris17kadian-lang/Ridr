@@ -67,6 +67,8 @@ export function paymentMethodToDisplay(pm: PaymentMethodDto): {
   type: 'visa' | 'mastercard';
   last4: string;
   label: string;
+  expiryMonth?: string;
+  expiryYear?: string;
 } {
   const b = (pm.brand ?? '').toLowerCase();
   const type: 'visa' | 'mastercard' =
@@ -76,5 +78,7 @@ export function paymentMethodToDisplay(pm: PaymentMethodDto): {
     type,
     last4: pm.last4,
     label: `${pm.brand ?? 'Card'} •••• ${pm.last4}`,
+    ...(pm.expiryMonth ? { expiryMonth: pm.expiryMonth } : {}),
+    ...(pm.expiryYear ? { expiryYear: pm.expiryYear } : {}),
   };
 }

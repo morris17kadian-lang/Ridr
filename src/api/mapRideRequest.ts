@@ -44,9 +44,22 @@ export function formatFareFromRideDto(dto: RideRequestDto): { fareLabel: string;
   };
 }
 
+function seatingFromMetadata(meta: Record<string, unknown> | undefined): 4 | 6 | undefined {
+  if (!meta) return undefined;
+  const raw = meta.seatingCapacity ?? meta.seats;
+  if (raw === 4 || raw === 6) return raw;
+  if (typeof raw === 'string') {
+    const n = parseInt(raw, 10);
+    if (n === 4 || n === 6) return n;
+  }
+  return undefined;
+}
+
 export function mergePollRideRequest(prev: ActiveTripState, dto: RideRequestDto): ActiveTripState {
   const status = mapApiRideStatusToLocal(dto.status);
   const { fareLabel, fareUsd } = formatFareFromRideDto(dto);
+  const meta = dto.metadata && typeof dto.metadata === 'object' ? (dto.metadata as Record<string, unknown>) : undefined;
+  const seating = seatingFromMetadata(meta);
   return {
     ...prev,
     status,
@@ -55,6 +68,7 @@ export function mergePollRideRequest(prev: ActiveTripState, dto: RideRequestDto)
     fareCurrency: dto.pricing?.currency,
     fromLabel: dto.pickup.address ?? prev.fromLabel,
     toLabel: dto.dropoff.address ?? prev.toLabel,
+    ...(seating ? { seatingCapacity: seating } : {}),
   };
 }
 
@@ -94,6 +108,7 @@ export function buildActiveTripFromCreateResponse(
     driverPin: pin,
     plate: `P ${Math.floor(1000 + Math.random() * 9000)}`,
     carDetails: 'Toyota Corolla · Silver',
+    seatingCapacity: 4,
     driverName: 'Marcus W.',
     driverCoordinate: opts.driverCoordinate,
     paymentLabel: opts.paymentLabel,

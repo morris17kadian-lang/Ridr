@@ -2,6 +2,7 @@ import React, { type JSX } from 'react';
 import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+import { hapticLight, hapticMedium, hapticSelection } from '../../../lib/haptics';
 import { ACTIVITY_FILTERS, mockActivityFeed, type ActivityItem } from '../data/mainTabData';
 import { mainTabStyles as styles } from '../styles/mainTabStyles';
 import type { ActiveTripState } from '../ride/activeTripTypes';
@@ -10,10 +11,15 @@ export type TabUi = {
   screenBg: string;
   panelBg: string;
   cardBg: string;
+  softBg: string;
   text: string;
   textMuted: string;
   divider: string;
   placeholder: string;
+  /** Brand accent (e.g. filter pills border / selected fill) */
+  accent: string;
+  /** Label color on accent background */
+  onAccentText: string;
 };
 
 type Props = {
@@ -66,8 +72,9 @@ export function ActivityTabScreen({
         <View style={styles.tabScreenHeaderRow}>
           <Text style={[styles.tabScreenTitle, { color: ui.text }]}>Activity</Text>
           <Pressable
-            style={[styles.tabSearchIconBtn, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}
+            style={[styles.tabSearchIconBtn, { backgroundColor: ui.softBg }]}
             onPress={() => {
+              hapticLight();
               setActivitySearchOpen((v) => !v);
               setActivitySearch('');
             }}
@@ -76,7 +83,7 @@ export function ActivityTabScreen({
           </Pressable>
         </View>
         {activitySearchOpen ? (
-          <View style={[styles.tabSearchBar, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0', borderColor: ui.divider }]}>
+          <View style={[styles.tabSearchBar, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
             <Ionicons name="search" size={15} color={ui.textMuted} />
             <TextInput
               style={[styles.tabSearchInput, { color: ui.text }]}
@@ -103,15 +110,34 @@ export function ActivityTabScreen({
         }
       >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activityFilterRow} contentContainerStyle={styles.activityFilterContent}>
-          {ACTIVITY_FILTERS.map((f) => (
-            <Pressable
-              key={f.key}
-              style={[styles.activityFilterPill, activityFilter === f.key && styles.activityFilterPillActive]}
-              onPress={() => setActivityFilter(f.key)}
-            >
-              <Text style={[styles.activityFilterPillText, activityFilter === f.key && styles.activityFilterPillTextActive]}>{f.label}</Text>
-            </Pressable>
-          ))}
+          {ACTIVITY_FILTERS.map((f) => {
+            const selected = activityFilter === f.key;
+            return (
+              <Pressable
+                key={f.key}
+                style={[
+                  styles.activityFilterPill,
+                  selected
+                    ? { backgroundColor: ui.accent, borderColor: ui.accent, borderWidth: 0 }
+                    : { backgroundColor: 'transparent', borderColor: ui.accent, borderWidth: 1.5 },
+                ]}
+                onPress={() => {
+                  if (activityFilter !== f.key) hapticSelection();
+                  setActivityFilter(f.key);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.activityFilterPillText,
+                    selected && styles.activityFilterPillTextActive,
+                    { color: selected ? ui.onAccentText : ui.text },
+                  ]}
+                >
+                  {f.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </ScrollView>
 
         {(homeAddress || workAddress) ? (
@@ -120,7 +146,10 @@ export function ActivityTabScreen({
             {homeAddress ? (
               <Pressable
                 style={[styles.tabCard, { backgroundColor: ui.cardBg }]}
-                onPress={() => onBookAddress('home')}
+                onPress={() => {
+                  hapticLight();
+                  onBookAddress('home');
+                }}
               >
                 <View style={styles.activityCardContent}>
                   <View style={styles.activityCardRow}>
@@ -139,7 +168,10 @@ export function ActivityTabScreen({
             {workAddress ? (
               <Pressable
                 style={[styles.tabCard, { backgroundColor: ui.cardBg }]}
-                onPress={() => onBookAddress('work')}
+                onPress={() => {
+                  hapticLight();
+                  onBookAddress('work');
+                }}
               >
                 <View style={styles.activityCardContent}>
                   <View style={styles.activityCardRow}>
@@ -196,7 +228,10 @@ export function ActivityTabScreen({
                 borderWidth: 1,
               },
             ]}
-            onPress={onOpenPresentRide}
+            onPress={() => {
+              hapticMedium();
+              onOpenPresentRide();
+            }}
           >
             <View style={styles.activityCardContent}>
               <View style={styles.activityCardRow}>

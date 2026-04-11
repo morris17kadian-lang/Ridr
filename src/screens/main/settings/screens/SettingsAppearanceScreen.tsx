@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, ScrollView, StatusBar, Text, View } from 'react-native';
-import type { ThemeOverride } from '../../../theme/ThemeProvider';
-import type { MainScreenUi } from '../mainScreenUi';
-import { styles } from '../styles/mainScreenStyles';
+import type { ThemeOverride } from '../../../../theme/ThemeProvider';
+import type { MainScreenUi } from '../../mainScreenUi';
+import { styles } from '../../styles/mainScreenStyles';
 
 const OPTIONS: Array<{ label: string; value: ThemeOverride; icon: string }> = [
   { label: 'System default', value: 'system', icon: 'phone-portrait-outline' },

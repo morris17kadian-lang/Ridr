@@ -1,4 +1,6 @@
 export { getApiBaseUrl, getDefaultRideTypeSlug } from './config';
+export { postPaymentsTokenize } from './payments';
+export type { PaymentsTokenizeRequest, PaymentsTokenizeSource } from './payments';
 export { countDriversInNearbyResponse, getNearbyDrivers } from './drivers';
 export { apiRequest } from './http';
 export {

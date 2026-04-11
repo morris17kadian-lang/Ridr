@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { greyCarAsset } from '../../../assets/images';
+import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../../../lib/haptics';
 import type { MainScreenUi } from '../mainScreenUi';
 
 const THUMB = 64;
@@ -100,6 +101,8 @@ export type DriverInfo = {
   plate: string;
   rating: number;
   etaLabel: string;
+  /** Passenger capacity (4 = sedan, 6 = SUV/van). */
+  seatingCapacity: 4 | 6;
 };
 
 type Phase = 'searching' | 'readySwipe' | 'no_driver_found' | 'zooming';
@@ -274,7 +277,10 @@ function DriverList({
         return (
           <Pressable
             key={i}
-            onPress={() => onSelect(i)}
+            onPress={() => {
+              hapticSelection();
+              onSelect(i);
+            }}
             style={[
               styles.driverListCard,
               {
@@ -291,13 +297,17 @@ function DriverList({
               },
             ]}
           >
-            {/* Car image */}
+            {/* Car image — neutral asset only */}
             <Image source={greyCarAsset} style={styles.driverListCarImg} resizeMode="contain" />
-            {/* Driver info */}
             <View style={styles.driverListInfo}>
-              <View style={styles.driverListNameRow}>
-                <Text style={[styles.driverListName, { color: ui.text }]}>Driver {i + 1}</Text>
-                <Ionicons name="checkmark-circle" size={14} color="#22c55e" />
+              <Text style={[styles.driverListCarType, { color: ui.text }]} numberOfLines={2}>
+                {driver.carDetails}
+              </Text>
+              <View style={styles.driverListMeta}>
+                <Ionicons name="people-outline" size={14} color={ui.textMuted} />
+                <Text style={[styles.driverListMetaText, { color: ui.textMuted }]}>
+                  {driver.seatingCapacity} seats
+                </Text>
               </View>
             </View>
             {/* ETA badge */}
@@ -402,6 +412,7 @@ function SwipeToSend({
           const x = Math.max(0, Math.min(maxX, fingerX - THUMB / 2));
           if (maxX > 0 && x >= maxX * 0.6) {
             setThumbX(maxX);
+            hapticSuccess();
             onConfirm();
             setThumbX(0);
           } else {
@@ -500,6 +511,7 @@ export function FindingDriverModal({
         plate: driverPlate,
         rating: driverRating,
         etaLabel,
+        seatingCapacity: 4,
       }];
   const modalTitle = searching ? 'Finding Driver' : noDriver ? 'No Drivers Nearby' : `${driverList.length} Driver${driverList.length === 1 ? '' : 's'} Found`;
   const [selectedDriverIndex, setSelectedDriverIndex] = useState(-1);
@@ -510,7 +522,14 @@ export function FindingDriverModal({
         <BlurView intensity={Platform.OS === 'ios' ? 42 : 32} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
         <Pressable
           style={styles.dimTap}
-          onPress={searching ? undefined : onClose}
+          onPress={
+            searching
+              ? undefined
+              : () => {
+                  hapticLight();
+                  onClose();
+                }
+          }
           pointerEvents="auto"
         />
         <View style={[styles.sheet, { backgroundColor: ui.cardBg, borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.07)' }]} pointerEvents="auto">
@@ -525,7 +544,15 @@ export function FindingDriverModal({
               ) : null}
               <Text style={[styles.title, { color: ui.text }]}>{modalTitle}</Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={12} accessibilityLabel="Close" style={[styles.closeBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)' }]}>
+            <Pressable
+            onPress={() => {
+              hapticLight();
+              onClose();
+            }}
+            hitSlop={12}
+            accessibilityLabel="Close"
+            style={[styles.closeBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)' }]}
+          >
               <Ionicons name="close" size={18} color={ui.textMuted} />
             </Pressable>
           </View>
@@ -540,7 +567,10 @@ export function FindingDriverModal({
               </View>
               {__DEV__ && typeof onDevSkipWait === 'function' ? (
                 <Pressable
-                  onPress={onDevSkipWait}
+                  onPress={() => {
+                    hapticMedium();
+                    onDevSkipWait?.();
+                  }}
                   style={[styles.devSkipBtn, { borderColor: ui.divider, backgroundColor: ui.softBg }]}
                   accessibilityLabel="Skip wait (development only)"
                 >
@@ -580,6 +610,82 @@ export function FindingDriverModal({
                     </View>
                   </View>
                 </View>
+              </View>
+
+              {/* Card vs cash — updates parent state before slide-to-pay */}
+              <View style={[styles.paymentMethodBlock, { borderTopColor: ui.divider }]}>
+                <Text style={[styles.paymentMethodLabel, { color: ui.textMuted }]}>Pay with</Text>
+                <View style={styles.paymentChipsRow}>
+                  <Pressable
+                    onPress={() => {
+                      if (canPayWithCard) {
+                        hapticSelection();
+                        onChangePayment('Card');
+                      }
+                    }}
+                    disabled={!canPayWithCard}
+                    style={[
+                      styles.paymentChip,
+                      {
+                        borderColor: paymentLabel === 'Card' ? ACCENT : ui.divider,
+                        backgroundColor: paymentLabel === 'Card' ? ACCENT : 'transparent',
+                        opacity: canPayWithCard ? 1 : 0.5,
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Pay with card"
+                    accessibilityState={{ selected: paymentLabel === 'Card', disabled: !canPayWithCard }}
+                  >
+                    <Ionicons
+                      name="card-outline"
+                      size={16}
+                      color={paymentLabel === 'Card' ? '#171717' : ui.text}
+                    />
+                    <Text
+                      style={[
+                        styles.paymentChipText,
+                        { color: paymentLabel === 'Card' ? '#171717' : ui.text },
+                      ]}
+                    >
+                      Card
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      hapticSelection();
+                      onChangePayment('Cash');
+                    }}
+                    style={[
+                      styles.paymentChip,
+                      {
+                        borderColor: paymentLabel === 'Cash' ? ACCENT : ui.divider,
+                        backgroundColor: paymentLabel === 'Cash' ? ACCENT : 'transparent',
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Pay with cash"
+                    accessibilityState={{ selected: paymentLabel === 'Cash' }}
+                  >
+                    <Ionicons
+                      name="cash-outline"
+                      size={16}
+                      color={paymentLabel === 'Cash' ? '#171717' : ui.text}
+                    />
+                    <Text
+                      style={[
+                        styles.paymentChipText,
+                        { color: paymentLabel === 'Cash' ? '#171717' : ui.text },
+                      ]}
+                    >
+                      Cash
+                    </Text>
+                  </Pressable>
+                </View>
+                {!canPayWithCard ? (
+                  <Text style={[styles.paymentHint, { color: ui.textMuted }]}>
+                    Add a default card in Profile to pay with card.
+                  </Text>
+                ) : null}
               </View>
 
               {/* Driver list */}
@@ -837,25 +943,44 @@ const styles = StyleSheet.create({
   },
   paymentHint: {
     fontSize: 12,
-    marginTop: 6,
+    marginTop: 4,
     lineHeight: 16,
+  },
+  paymentMethodBlock: {
+    marginHorizontal: 14,
+    marginTop: 4,
+    paddingTop: 12,
+    paddingBottom: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 8,
+  },
+  paymentMethodLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   paymentSection: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 10,
     paddingTop: 10,
+    
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   paymentChipsRow: {
     flexDirection: 'row',
-    gap: 6,
+    flexWrap: 'wrap',
+    gap: 8,
   },
   paymentChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     borderWidth: 1.5,
     borderRadius: 999,
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   paymentChipText: {
     fontSize: 13,
@@ -992,91 +1117,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     lineHeight: 18,
   },
-  driverRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginHorizontal: 22,
-    marginBottom: 10,
-  },
-  driverCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginHorizontal: 14,
-    marginBottom: 10,
-    padding: 14,
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  driverAvatarCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  driverAvatarText: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  driverInfo: {
-    flex: 1,
-    gap: 3,
-    alignItems: 'flex-end',
-  },
-  driverNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-  },
-  driverNameText: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  verifiedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  verifiedText: {
-    fontSize: 11,
-    color: '#22c55e',
-    fontWeight: '600',
-  },
-  driverCarText: {
-    fontSize: 13,
-    lineHeight: 17,
-  },
-  driverMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
-  platePill: {
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  plateText: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  ratingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  ratingText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
   swipeTrack: {
     height: TRACK_H,
     borderRadius: TRACK_H / 2,
@@ -1147,30 +1187,23 @@ const styles = StyleSheet.create({
   },
   driverListInfo: {
     flex: 1,
-    gap: 2,
+    gap: 6,
+    justifyContent: 'center',
   },
-  driverListNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  driverListName: {
-    fontSize: 16,
-    fontWeight: '800',
+  driverListCarType: {
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 20,
     letterSpacing: -0.2,
-  },
-  driverListSub: {
-    fontSize: 12,
-    lineHeight: 16,
   },
   driverListMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
+    gap: 6,
+    marginTop: 0,
   },
   driverListMetaText: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '600',
   },
   driverListEtaBadge: {
