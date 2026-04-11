@@ -5,8 +5,8 @@ import type { MainStackParamList } from './types';
 const Stack = createNativeStackNavigator<MainStackParamList>();
 
 /**
- * Main app experience (map, profile, edit) lives in a single screen for now
- * with internal navigation state; can be split into separate stack screens later.
+ * Main app shell: `MainScreen` holds map + tabs; full-screen flows are routed in
+ * `src/screens/main/subScreens/MainSubScreenRouter.tsx` (profile, settings, etc.).
  */
 export function MainStack() {
   return (

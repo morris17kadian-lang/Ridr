@@ -8,6 +8,7 @@ import type { TabUi } from './ActivityTabScreen';
 
 type SettingsScreen =
   | 'settingsPassword'
+  | 'settingsPayment'
   | 'settingsNotifications'
   | 'settingsLanguage'
   | 'settingsAppearance'
@@ -76,7 +77,7 @@ export function SettingsTabScreen({
 
         <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Preferences</Text>
         <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-          <Pressable style={styles.settingsRow} onPress={openProfile}>
+          <Pressable style={styles.settingsRow} onPress={() => setScreen('settingsPayment')}>
             <Ionicons name="card-outline" size={20} color={ui.text} />
             <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Payment Methods</Text>
             <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />

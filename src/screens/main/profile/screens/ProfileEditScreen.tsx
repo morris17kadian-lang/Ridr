@@ -10,9 +10,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import type { MainScreenUi } from '../mainScreenUi';
-import { styles } from '../styles/mainScreenStyles';
-import { PROFILE_COUNTRY_CODES } from './countryCodes';
+import type { MainScreenUi } from '../../mainScreenUi';
+import { styles } from '../../styles/mainScreenStyles';
+import { PROFILE_COUNTRY_CODES } from '../countryCodes';
 
 type Props = {
   ui: MainScreenUi;

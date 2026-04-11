@@ -1,5 +1,5 @@
 import React from 'react';
-import SupportTicketScreen from '../support/SupportTicketScreen';
+import SupportTicketScreen from '../../support/SupportTicketScreen';
 
 type Props = {
   userEmail: string;

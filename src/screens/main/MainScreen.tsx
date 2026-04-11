@@ -41,18 +41,17 @@ import {
   clearAppCache,
 } from '../../lib/appCacheStorage';
 import { AUTH_SESSION_KEY, useAuth } from '../../context/AuthContext';
+import {
+  hapticLight,
+  hapticMedium,
+  hapticSelection,
+  hapticSuccess,
+  hapticWarning,
+} from '../../lib/haptics';
 import { useAppTheme } from '../../theme/ThemeProvider';
-import { ProfileEditScreen } from './profile/ProfileEditScreen';
-import { ProfileScreen } from './profile/ProfileScreen';
 import type { ProfileCard } from './profile/profileTypes';
-import { SettingsAppearanceScreen } from './settings/SettingsAppearanceScreen';
-import { NotificationsScreen } from './notifications/NotificationsScreen';
-import { SettingsHelpScreen } from './settings/SettingsHelpScreen';
-import { SettingsLanguageScreen } from './settings/SettingsLanguageScreen';
-import { SettingsNotificationsScreen } from './settings/SettingsNotificationsScreen';
-import { SettingsPasswordScreen } from './settings/SettingsPasswordScreen';
-import { SettingsSupportScreen } from './settings/SettingsSupportScreen';
-import { SettingsTermsScreen } from './settings/SettingsTermsScreen';
+import { MainSubScreenRouter } from './subScreens/MainSubScreenRouter';
+import type { MainStackSubScreen } from './subScreens/types';
 import {
   fetchPlaceDetailsCoordinate,
   isInJamaicaServiceArea,
@@ -70,7 +69,6 @@ import { ActivityTabScreen } from './tabs/ActivityTabScreen';
 import { FavouritesTabScreen } from './tabs/FavouritesTabScreen';
 import { SettingsTabScreen } from './tabs/SettingsTabScreen';
 import { usePushToken } from '../../hooks/usePushToken';
-import { ActiveRideScreen } from './ride/ActiveRideScreen';
 import type {
   ActiveTripState,
   TripRecord,
@@ -83,6 +81,7 @@ import { interpolateRoutePoint } from './ride/routeGeometry';
 import {
   countDriversInNearbyResponse,
   createPaymentMethod,
+  deletePaymentMethod,
   getNearbyDrivers,
   listPaymentMethods,
   paymentMethodToDisplay,
@@ -554,11 +553,7 @@ export default function MainScreen() {
   const [favSearch, setFavSearch] = useState('');
   const [favSearchOpen, setFavSearchOpen] = useState(false);
   const [selectedRideDetail, setSelectedRideDetail] = useState<typeof mockRideHistory[0] | null>(null);
-  const [screen, setScreen] = useState<
-    'home' | 'activeRide' | 'profile' | 'profileEdit' | 'notifications' |
-    'settingsNotifications' | 'settingsPassword' | 'settingsLanguage' |
-    'settingsAppearance' | 'settingsHelp' | 'settingsTerms' | 'settingsSupport'
-  >('home');
+  const [screen, setScreen] = useState<MainStackSubScreen>('home');
   const [sheetMinimized, setSheetMinimized] = useState(false);
   /** Long-press on map → choose whether to fill From or To. */
   const mapViewRef = useRef<MapView | null>(null);
@@ -632,6 +627,7 @@ export default function MainScreen() {
   const [selectedPaymentLabel, setSelectedPaymentLabel] = useState<'Card' | 'Cash'>('Card');
   const [findingDriverVisible, setFindingDriverVisible] = useState(false);
   const [findingDriverPhase, setFindingDriverPhase] = useState<'searching' | 'readySwipe' | 'no_driver_found' | 'zooming'>('searching');
+  const findingPhaseHapticRef = useRef<string | null>(null);
   const [nearbyDriverSpots, setNearbyDriverSpots] = useState<LatLng[]>([]);
   const [activeTrip, setActiveTrip] = useState<ActiveTripState | null>(null);
   const [bookedRides, setBookedRides] = useState<BookedRideRecord[]>([]);
@@ -659,8 +655,6 @@ export default function MainScreen() {
   const [notifPayments, setNotifPayments] = useState(true);
   const [notifModalVisible, setNotifModalVisible] = useState(false);
   const [changePwModalVisible, setChangePwModalVisible] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [langModalVisible, setLangModalVisible] = useState(false);
   const [selectedLang, setSelectedLang] = useState('English');
   const [helpModalVisible, setHelpModalVisible] = useState(false);
@@ -674,6 +668,11 @@ export default function MainScreen() {
   const [newCardName, setNewCardName] = useState('');
   const [newCardExpiry, setNewCardExpiry] = useState('');
   const [newCardCvv, setNewCardCvv] = useState('');
+  const [editExpiryVisible, setEditExpiryVisible] = useState(false);
+  const [editExpiryCardId, setEditExpiryCardId] = useState<string | null>(null);
+  const [editExpiryLast4, setEditExpiryLast4] = useState('');
+  const [editExpiryMonth, setEditExpiryMonth] = useState('');
+  const [editExpiryYear, setEditExpiryYear] = useState('');
 
   const refreshPaymentMethods = useCallback(async () => {
     if (!user) {
@@ -708,6 +707,7 @@ export default function MainScreen() {
         setDefaultCard(id);
         await AsyncStorage.setItem('profile_default_card', id);
         await refreshPaymentMethods();
+        hapticSelection();
       } catch (e) {
         Alert.alert('Could not set default card', e instanceof Error ? e.message : 'Try again.');
       }
@@ -715,7 +715,94 @@ export default function MainScreen() {
     [refreshPaymentMethods]
   );
 
+  const closeEditCardExpiry = useCallback(() => {
+    setEditExpiryVisible(false);
+    setEditExpiryCardId(null);
+    setEditExpiryLast4('');
+    setEditExpiryMonth('');
+    setEditExpiryYear('');
+  }, []);
+
+  const openEditCardExpiry = useCallback((card: ProfileCard) => {
+    setEditExpiryCardId(card.id);
+    setEditExpiryLast4(card.last4);
+    const mm = card.expiryMonth?.replace(/\D/g, '') ?? '';
+    setEditExpiryMonth(mm.length === 0 ? '' : mm.length <= 2 ? mm.padStart(2, '0').slice(0, 2) : mm.slice(0, 2));
+    const y = card.expiryYear?.replace(/\D/g, '') ?? '';
+    setEditExpiryYear(y.length === 0 ? '' : y.length >= 4 ? y.slice(-2) : y.slice(0, 2));
+    setEditExpiryVisible(true);
+  }, []);
+
+  const saveEditCardExpiry = useCallback(async () => {
+    if (!editExpiryCardId) return;
+    const mm = editExpiryMonth.replace(/\D/g, '').slice(0, 2);
+    const yy = editExpiryYear.replace(/\D/g, '').slice(-2);
+    if (mm.length !== 2) {
+      Alert.alert('Expiry', 'Enter month as MM (01–12).');
+      return;
+    }
+    const mNum = parseInt(mm, 10);
+    if (mNum < 1 || mNum > 12) {
+      Alert.alert('Expiry', 'Month must be between 01 and 12.');
+      return;
+    }
+    if (yy.length !== 2) {
+      Alert.alert('Expiry', 'Enter year as YY.');
+      return;
+    }
+    try {
+      await updatePaymentMethod(editExpiryCardId, { expiryMonth: mm, expiryYear: yy });
+      closeEditCardExpiry();
+      await refreshPaymentMethods();
+    } catch (e) {
+      Alert.alert('Could not update card', e instanceof Error ? e.message : 'Try again.');
+    }
+  }, [editExpiryCardId, editExpiryMonth, editExpiryYear, closeEditCardExpiry, refreshPaymentMethods]);
+
+  const deleteCard = useCallback(
+    (id: string) => {
+      Alert.alert(
+        'Remove card?',
+        'This card will be removed from your account. You can add a new card anytime.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: () =>
+              void (async () => {
+                try {
+                  await deletePaymentMethod(id);
+                  await refreshPaymentMethods();
+                } catch (e) {
+                  Alert.alert('Could not remove card', e instanceof Error ? e.message : 'Try again.');
+                }
+              })(),
+          },
+        ]
+      );
+    },
+    [refreshPaymentMethods]
+  );
+
+  const onPaymentMethodLongPress = useCallback(
+    (card: ProfileCard) => {
+      hapticMedium();
+      Alert.alert(
+        'Payment method',
+        'Update expiry or remove this card.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Update expiry', onPress: () => openEditCardExpiry(card) },
+          { text: 'Delete', style: 'destructive', onPress: () => deleteCard(card.id) },
+        ]
+      );
+    },
+    [openEditCardExpiry, deleteCard]
+  );
+
   const handleClearCache = useCallback(() => {
+    hapticMedium();
     Alert.alert(
       'Clear cache?',
       'Removes cached trips, ride history, profile snapshot, and local payment-method copy. You stay signed in.',
@@ -1194,6 +1281,18 @@ export default function MainScreen() {
   }, [findingDriverVisible, findingDriverPhase]);
 
   useEffect(() => {
+    if (!findingDriverVisible) {
+      findingPhaseHapticRef.current = null;
+      return;
+    }
+    const p = findingDriverPhase;
+    const prev = findingPhaseHapticRef.current;
+    if (p === 'readySwipe' && prev !== 'readySwipe') hapticSuccess();
+    if (p === 'no_driver_found' && prev !== 'no_driver_found') hapticWarning();
+    findingPhaseHapticRef.current = p;
+  }, [findingDriverVisible, findingDriverPhase]);
+
+  useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 15000);
     return () => clearInterval(t);
   }, []);
@@ -1317,6 +1416,9 @@ export default function MainScreen() {
       headerOverlay: colors.headerOverlay,
       tabActive: colors.tabActive,
       tabInactive: colors.tabInactive,
+      accent: colors.accent,
+      /** Text on accent fills (e.g. filter chips) — dark on yellow for contrast */
+      onAccentText: '#171717',
       ctaBg: colors.primary,
       ctaText: colors.textOnPrimary,
       success: colors.success,
@@ -1422,16 +1524,19 @@ export default function MainScreen() {
   };
 
   const openProfile = () => {
+    hapticLight();
     syncEditingFromUser();
     setScreen('profile');
   };
 
   const openProfileEdit = () => {
+    hapticLight();
     syncEditingFromUser();
     setScreen('profileEdit');
   };
 
   const onConfirmSignOut = () => {
+    hapticMedium();
     Alert.alert(
       'Sign out?',
       'Are you sure you want to sign out of your account?',
@@ -1599,9 +1704,11 @@ export default function MainScreen() {
     setBookingFor(forWhom);
     setFindingDriverPhase('searching');
     setFindingDriverVisible(true);
+    hapticMedium();
   };
   const openFindingDriver = () => {
     if (presentRide) {
+      hapticLight();
       Alert.alert(
         'Existing ride found',
         'Book this next ride for yourself or a friend?',
@@ -1714,6 +1821,7 @@ export default function MainScreen() {
     setSelectedPaymentLabel(canCard ? 'Card' : 'Cash');
   }, [cards, defaultCard]);
   const retryFindingDriver = () => {
+    hapticLight();
     setNearbyDriverSpots([]);
     setFindingDriverPhase('searching');
   };
@@ -1869,6 +1977,7 @@ export default function MainScreen() {
   };
   const openBookedRideFromActivity = (ride: BookedRideRecord) => {
     if (ride.status === 'completed' || ride.status === 'cancelled') {
+      hapticLight();
       Alert.alert(
         ride.status === 'completed' ? 'Trip completed' : 'Trip cancelled',
         `${ride.fromLabel} → ${ride.toLabel}\nFare: $${(ride.totalFare ?? ride.fareUsd).toFixed(2)}`
@@ -1876,9 +1985,11 @@ export default function MainScreen() {
       return;
     }
     if (ride.expiresAtMs <= Date.now()) {
+      hapticWarning();
       Alert.alert('Ride expired', 'This booked ride is no longer active.');
       return;
     }
+    hapticMedium();
     setActiveTrip(ride);
     setScreen('activeRide');
   };
@@ -2246,6 +2357,7 @@ export default function MainScreen() {
   });
 
   const expandSheetFromMinimized = () => {
+    hapticLight();
     setSheetMinimized(false);
     Animated.spring(minimizedTranslateY, {
       toValue: 0,
@@ -2371,6 +2483,7 @@ export default function MainScreen() {
   };
 
   const selectDestination = (item: SearchSuggestion) => {
+    hapticSelection();
     if (destinationBlurTimerRef.current) {
       clearTimeout(destinationBlurTimerRef.current);
       destinationBlurTimerRef.current = null;
@@ -2396,6 +2509,7 @@ export default function MainScreen() {
   };
 
   const selectTo = (item: SearchSuggestion) => {
+    hapticSelection();
     if (toBlurTimerRef.current) {
       clearTimeout(toBlurTimerRef.current);
       toBlurTimerRef.current = null;
@@ -2504,177 +2618,93 @@ export default function MainScreen() {
     []
   );
 
-  // ── Profile & settings sub-screens (see profile/, settings/) ─────
-  if (screen === 'profile') {
-    return (
-      <ProfileScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('home')}
-        onEdit={openProfileEdit}
-        userFirstName={userFirstName}
-        userLastName={userLastName}
-        userEmail={userEmail}
-        userPhoneE164={userPhoneE164}
-        cards={cards}
-        defaultCard={defaultCard}
-        selectDefaultCard={selectDefaultCard}
-        addCardVisible={addCardVisible}
-        setAddCardVisible={setAddCardVisible}
-        newCardNumber={newCardNumber}
-        setNewCardNumber={setNewCardNumber}
-        newCardName={newCardName}
-        setNewCardName={setNewCardName}
-        newCardExpiry={newCardExpiry}
-        setNewCardExpiry={setNewCardExpiry}
-        newCardCvv={newCardCvv}
-        setNewCardCvv={setNewCardCvv}
-        closeAddCardSheet={closeAddCardSheet}
-        saveNewCard={saveNewCard}
-        onConfirmSignOut={onConfirmSignOut}
-      />
-    );
-  }
-
-  if (screen === 'profileEdit') {
-    return (
-      <ProfileEditScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('profile')}
-        onSave={saveProfile}
-        profileDirty={profileDirty}
-        editingFirstName={editingFirstName}
-        setEditingFirstName={setEditingFirstName}
-        editingLastName={editingLastName}
-        setEditingLastName={setEditingLastName}
-        editingEmail={editingEmail}
-        setEditingEmail={setEditingEmail}
-        editingUsername={editingUsername}
-        setEditingUsername={setEditingUsername}
-        editingPassword={editingPassword}
-        setEditingPassword={setEditingPassword}
-        showPassword={showPassword}
-        setShowPassword={setShowPassword}
-        editingPhone={editingPhone}
-        setEditingPhone={setEditingPhone}
-        countryCode={countryCode}
-        setCountryCode={setCountryCode}
-        countryPickerVisible={countryPickerVisible}
-        setCountryPickerVisible={setCountryPickerVisible}
-        addressModal={addressModal}
-        addressInput={addressInput}
-        setAddressInput={setAddressInput}
-        saveAddress={saveAddress}
-        closeAddressModal={() => { setAddressModal(null); setAddressInput(''); }}
-      />
-    );
-  }
-
-  if (screen === 'settingsNotifications') {
-    return (
-      <SettingsNotificationsScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('home')}
-        notifRideUpdates={notifRideUpdates}
-        setNotifRideUpdates={setNotifRideUpdates}
-        notifDriverArrival={notifDriverArrival}
-        setNotifDriverArrival={setNotifDriverArrival}
-        notifTripReceipt={notifTripReceipt}
-        setNotifTripReceipt={setNotifTripReceipt}
-        notifPromos={notifPromos}
-        setNotifPromos={setNotifPromos}
-        notifNewFeatures={notifNewFeatures}
-        setNotifNewFeatures={setNotifNewFeatures}
-        notifSurveys={notifSurveys}
-        setNotifSurveys={setNotifSurveys}
-        notifSecurity={notifSecurity}
-        setNotifSecurity={setNotifSecurity}
-        notifPayments={notifPayments}
-        setNotifPayments={setNotifPayments}
-      />
-    );
-  }
-
-  if (screen === 'settingsPassword') {
-    return (
-      <SettingsPasswordScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('home')}
-        onUpdated={() => setScreen('home')}
-        newPassword={newPassword}
-        setNewPassword={setNewPassword}
-        confirmPassword={confirmPassword}
-        setConfirmPassword={setConfirmPassword}
-      />
-    );
-  }
-
-  if (screen === 'settingsLanguage') {
-    return (
-      <SettingsLanguageScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('home')}
-        selectedLang={selectedLang}
-        onSelectLang={(lang) => { setSelectedLang(lang); setScreen('home'); }}
-      />
-    );
-  }
-
-  if (screen === 'settingsAppearance') {
-    return (
-      <SettingsAppearanceScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('home')}
-        themeOverride={themeOverride}
-        setThemeOverride={setThemeOverride}
-      />
-    );
-  }
-
-  if (screen === 'settingsHelp') {
-    return (
-      <SettingsHelpScreen
-        ui={ui}
-        isDark={isDark}
-        onBack={() => setScreen('home')}
-        onContactSupport={() => setScreen('settingsSupport')}
-      />
-    );
-  }
-
-  if (screen === 'settingsSupport') {
-    return (
-      <SettingsSupportScreen
-        userEmail={userEmail}
-        userFirstName={userFirstName}
-        onBack={() => setScreen('home')}
-      />
-    );
-  }
-
-  if (screen === 'notifications') {
-    return <NotificationsScreen ui={ui} isDark={isDark} onBack={() => setScreen('home')} />;
-  }
-
-  if (screen === 'settingsTerms') {
-    return <SettingsTermsScreen ui={ui} isDark={isDark} onBack={() => setScreen('home')} />;
-  }
-
-  if (screen === 'activeRide' && presentRide) {
-    return (
-      <ActiveRideScreen
-        trip={presentRide}
-        ui={ui}
-        isDark={isDark}
-        onEndTrip={leaveActiveRideScreen}
-      />
-    );
-  }
+  const subScreen = MainSubScreenRouter({
+    screen,
+    setScreen,
+    ui,
+    isDark,
+    themeOverride,
+    setThemeOverride,
+    openProfileEdit,
+    userFirstName,
+    userLastName,
+    userEmail,
+    userPhoneE164,
+    cards,
+    defaultCard,
+    selectDefaultCard,
+    addCardVisible,
+    setAddCardVisible,
+    newCardNumber,
+    setNewCardNumber,
+    newCardName,
+    setNewCardName,
+    newCardExpiry,
+    setNewCardExpiry,
+    newCardCvv,
+    setNewCardCvv,
+    closeAddCardSheet,
+    saveNewCard,
+    onPaymentMethodLongPress,
+    editExpiryVisible,
+    editExpiryLast4,
+    editExpiryMonth,
+    setEditExpiryMonth,
+    editExpiryYear,
+    setEditExpiryYear,
+    closeEditCardExpiry,
+    saveEditCardExpiry,
+    onConfirmSignOut,
+    saveProfile,
+    profileDirty,
+    editingFirstName,
+    setEditingFirstName,
+    editingLastName,
+    setEditingLastName,
+    editingEmail,
+    setEditingEmail,
+    editingUsername,
+    setEditingUsername,
+    editingPassword,
+    setEditingPassword,
+    showPassword,
+    setShowPassword,
+    editingPhone,
+    setEditingPhone,
+    countryCode,
+    setCountryCode,
+    countryPickerVisible,
+    setCountryPickerVisible,
+    addressModal,
+    addressInput,
+    setAddressInput,
+    saveAddress,
+    closeAddressModal: () => {
+      setAddressModal(null);
+      setAddressInput('');
+    },
+    notifRideUpdates,
+    setNotifRideUpdates,
+    notifDriverArrival,
+    setNotifDriverArrival,
+    notifTripReceipt,
+    setNotifTripReceipt,
+    notifPromos,
+    setNotifPromos,
+    notifNewFeatures,
+    setNotifNewFeatures,
+    notifSurveys,
+    setNotifSurveys,
+    notifSecurity,
+    setNotifSecurity,
+    notifPayments,
+    setNotifPayments,
+    selectedLang,
+    setSelectedLang,
+    presentRide,
+    leaveActiveRideScreen,
+  });
+  if (subScreen) return subScreen;
 
   // ────────────────────────────────────────────────────────────────
 
@@ -2719,14 +2749,15 @@ export default function MainScreen() {
                 name: activeTrip.driverName,
                 carDetails: activeTrip.carDetails ?? 'Unknown vehicle',
                 plate: activeTrip.plate ?? '',
-                rating: activeTrip.driverRating ?? 4.9,
+                rating: activeTrip.rating ?? 4.9,
                 etaLabel: rideEtaLabel,
+                seatingCapacity: activeTrip.seatingCapacity ?? 4,
               }] as DriverInfo[])
             : ([
-                { name: 'Marcus W.', carDetails: 'Toyota Corolla · Silver', plate: 'PA 4821', rating: 4.9, etaLabel: '2 min' },
-                { name: 'Diana R.', carDetails: 'Honda Fit · White', plate: 'PB 3310', rating: 4.8, etaLabel: '4 min' },
-                { name: 'Trevor A.', carDetails: 'Nissan Tiida · Blue', plate: 'PC 7754', rating: 4.7, etaLabel: '6 min' },
-                { name: 'Sandra M.', carDetails: 'Toyota Axio · Black', plate: 'PD 1192', rating: 5.0, etaLabel: '8 min' },
+                { name: 'Marcus W.', carDetails: 'Toyota Corolla · Silver', plate: 'PA 4821', rating: 4.9, etaLabel: '2 min', seatingCapacity: 4 },
+                { name: 'Diana R.', carDetails: 'Honda Fit · White', plate: 'PB 3310', rating: 4.8, etaLabel: '4 min', seatingCapacity: 4 },
+                { name: 'Trevor A.', carDetails: 'Nissan Tiida · Blue', plate: 'PC 7754', rating: 4.7, etaLabel: '6 min', seatingCapacity: 6 },
+                { name: 'Sandra M.', carDetails: 'Toyota Axio · Black', plate: 'PD 1192', rating: 5.0, etaLabel: '8 min', seatingCapacity: 6 },
               ] as DriverInfo[])
         }
       />
@@ -2745,8 +2776,10 @@ export default function MainScreen() {
             }
           }}
           onLongPress={async (e) => {
+            hapticMedium();
             const coordinate = e.nativeEvent.coordinate;
             if (!isInJamaicaServiceArea(coordinate)) {
+              hapticWarning();
               Alert.alert(
                 'Outside service area',
                 'Ridr serves Jamaica. Long-press the map within Jamaica to set a location.'
@@ -2877,8 +2910,14 @@ export default function MainScreen() {
               <Text style={[styles.userName, { color: ui.text }]}>{displayName}</Text>
             </View>
           </View>
-          <Pressable style={[styles.supportButton, { backgroundColor: '#FFD000' }]} onPress={() => setScreen('notifications')}>
-            <Ionicons name="notifications" size={20} color="#171717" />
+          <Pressable
+            style={[styles.supportButton, { backgroundColor: '#FFD000' }]}
+            onPress={() => {
+              hapticLight();
+              setScreen('notifications');
+            }}
+          >
+            <Ionicons name="notifications" size={18} color="#171717" />
           </Pressable>
         </View>
       </Animated.View>
@@ -2925,6 +2964,7 @@ export default function MainScreen() {
               </View>
             </View>
             <Pressable style={styles.rideDetailBookBtn} onPress={() => {
+              hapticMedium();
               if (selectedRideDetail) {
                 setToQuery(selectedRideDetail.from);
                 setDestinationQuery(selectedRideDetail.to);
@@ -3138,6 +3178,7 @@ export default function MainScreen() {
             trip={presentRide}
             ui={ui}
             onPress={() => {
+              hapticMedium();
               setActiveTrip(presentRide);
               setScreen('activeRide');
             }}
@@ -3421,7 +3462,10 @@ export default function MainScreen() {
           setActivitySearchOpen={setActivitySearchOpen}
           activityFilter={activityFilter}
           setActivityFilter={setActivityFilter}
-          onSelectRideDetail={(ride) => setSelectedRideDetail(ride)}
+          onSelectRideDetail={(ride) => {
+            hapticLight();
+            setSelectedRideDetail(ride);
+          }}
           presentRide={presentRide}
           onOpenPresentRide={() => setScreen('activeRide')}
           recentBookedRides={bookedRides}
@@ -3444,8 +3488,14 @@ export default function MainScreen() {
           setFavSearchOpen={setFavSearchOpen}
           refreshing={refreshingMain}
           onRefresh={onRefreshMain}
-          onBookFavPlace={(title, subtitle) => setFavBookModal({ type: 'place', title, subtitle })}
-          onBookFavRoute={(from, to) => setFavBookModal({ type: 'route', from, to })}
+          onBookFavPlace={(title, subtitle) => {
+            hapticMedium();
+            setFavBookModal({ type: 'place', title, subtitle });
+          }}
+          onBookFavRoute={(from, to) => {
+            hapticMedium();
+            setFavBookModal({ type: 'route', from, to });
+          }}
         />
       ) : null}
 
@@ -3453,7 +3503,10 @@ export default function MainScreen() {
         <SettingsTabScreen
           ui={ui}
           openProfile={openProfile}
-          setScreen={setScreen}
+          setScreen={(s) => {
+            hapticSelection();
+            setScreen(s);
+          }}
           selectedLang={selectedLang}
           themeOverride={themeOverride}
           refreshing={refreshingMain}
@@ -3477,22 +3530,46 @@ export default function MainScreen() {
 
       {/* Bottom Navigation Tab Bar */}
       <BlurView intensity={80} tint={isDark ? "dark" : "light"} style={[styles.tabBar, { backgroundColor: isDark ? 'rgba(24,24,28,0.88)' : 'rgba(255,255,255,0.82)' }]}>
-        <Pressable style={styles.tabItem} onPress={() => setActiveTab('home')}>
+        <Pressable
+          style={styles.tabItem}
+          onPress={() => {
+            if (activeTab !== 'home') hapticSelection();
+            setActiveTab('home');
+          }}
+        >
           <Ionicons name={activeTab === 'home' ? 'home' : 'home-outline'} size={24} color={activeTab === 'home' ? ui.tabActive : ui.tabInactive} />
           <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'home' && styles.tabLabelActive, activeTab === 'home' ? { color: ui.tabActive } : null]}>Home</Text>
         </Pressable>
 
-        <Pressable style={styles.tabItem} onPress={() => setActiveTab('activity')}>
+        <Pressable
+          style={styles.tabItem}
+          onPress={() => {
+            if (activeTab !== 'activity') hapticSelection();
+            setActiveTab('activity');
+          }}
+        >
           <Ionicons name={activeTab === 'activity' ? 'time' : 'time-outline'} size={24} color={activeTab === 'activity' ? ui.tabActive : ui.tabInactive} />
           <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'activity' && styles.tabLabelActive, activeTab === 'activity' ? { color: ui.tabActive } : null]}>Activity</Text>
         </Pressable>
 
-        <Pressable style={styles.tabItem} onPress={() => setActiveTab('notifications')}>
+        <Pressable
+          style={styles.tabItem}
+          onPress={() => {
+            if (activeTab !== 'notifications') hapticSelection();
+            setActiveTab('notifications');
+          }}
+        >
           <Ionicons name={activeTab === 'notifications' ? 'heart' : 'heart-outline'} size={24} color={activeTab === 'notifications' ? ui.tabActive : ui.tabInactive} />
           <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'notifications' && styles.tabLabelActive, activeTab === 'notifications' ? { color: ui.tabActive } : null]}>Favourites</Text>
         </Pressable>
 
-        <Pressable style={styles.tabItem} onPress={() => setActiveTab('settings')}>
+        <Pressable
+          style={styles.tabItem}
+          onPress={() => {
+            if (activeTab !== 'settings') hapticSelection();
+            setActiveTab('settings');
+          }}
+        >
           <Ionicons name={activeTab === 'settings' ? 'settings' : 'settings-outline'} size={24} color={activeTab === 'settings' ? ui.tabActive : ui.tabInactive} />
           <Text style={[styles.tabLabel, { color: ui.tabInactive }, activeTab === 'settings' && styles.tabLabelActive, activeTab === 'settings' ? { color: ui.tabActive } : null]}>Settings</Text>
         </Pressable>

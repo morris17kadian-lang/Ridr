@@ -3,6 +3,8 @@ export type ProfileCard = {
   type: 'visa' | 'mastercard';
   last4: string;
   label: string;
+  expiryMonth?: string;
+  expiryYear?: string;
 };
 
 export const DEFAULT_PROFILE_CARDS: ProfileCard[] = [

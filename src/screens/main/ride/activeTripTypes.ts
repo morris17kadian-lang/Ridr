@@ -37,6 +37,8 @@ export type ActiveTripState = {
   driverPin: string;
   plate: string;
   carDetails: string;
+  /** Vehicle seating (4 or 6) — shown on driver match UI. */
+  seatingCapacity?: 4 | 6;
   driverName: string;
   driverCoordinate: LatLng;
   startedAtMs?: number;

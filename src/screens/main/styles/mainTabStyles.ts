@@ -73,22 +73,14 @@ export const mainTabStyles = StyleSheet.create({
   },
   activityFilterPill: {
     borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: '#FFD000',
     paddingHorizontal: 14,
     paddingVertical: 6,
   },
-  activityFilterPillActive: {
-    backgroundColor: '#FFD000',
-    borderWidth: 0,
-  },
   activityFilterPillText: {
-    color: '#000000',
     fontSize: 13,
     fontWeight: '700',
   },
   activityFilterPillTextActive: {
-    color: '#000000',
     fontWeight: '800',
   },
   activityGroupHeader: {

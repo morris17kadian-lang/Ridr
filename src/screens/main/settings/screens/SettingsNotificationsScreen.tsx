@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, ScrollView, StatusBar, Switch, Text, View } from 'react-native';
-import type { MainScreenUi } from '../mainScreenUi';
-import { styles } from '../styles/mainScreenStyles';
+import type { MainScreenUi } from '../../mainScreenUi';
+import { styles } from '../../styles/mainScreenStyles';
 
 type Props = {
   ui: MainScreenUi;
