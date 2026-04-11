@@ -56,6 +56,8 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
   const [elapsedSec, setElapsedSec] = useState(0);
   const [mapBottomPad, setMapBottomPad] = useState(MAP_PAD_EXPANDED);
 
+  const etaCountdownSec = Math.max(0, totalEtaSec - elapsedSec);
+
   const tripPath = useMemo(() => {
     if (trip.routeCoords.length < 2) return [trip.pickup, trip.dropoff];
     const pickupIdx = nearestRouteIndex(trip.routeCoords, trip.pickup);
@@ -107,7 +109,8 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => maxTranslateRef.current > 8,
+        // Don't capture taps; only capture when user drags.
+        onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_, g) =>
           maxTranslateRef.current > 8 && Math.abs(g.dy) > Math.abs(g.dx) && Math.abs(g.dy) > 6,
         onPanResponderTerminationRequest: () => false,
@@ -252,19 +255,17 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
         </Marker>
       </MapView>
 
-      <View style={[styles.headerOverlay, { backgroundColor: isDark ? 'rgba(20,20,24,0.88)' : 'rgba(255,255,255,0.92)', borderBottomColor: ui.divider }]}>
+      <View style={[styles.headerOverlay, { backgroundColor: 'transparent' }]}>
         <Pressable style={styles.backBtn} onPress={onEndTrip} hitSlop={12}>
           <Ionicons name="arrow-back" size={24} color={ui.text} />
         </Pressable>
-        <View style={styles.headerTitleWrap}>
-          <Text style={[styles.headerTitle, { color: ui.text }]}>{headerTitle}</Text>
-          <Text style={[styles.headerSub, { color: ui.textMuted }]} numberOfLines={1}>{driverStatus}</Text>
-        </View>
-        <View style={[styles.etaChip, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-          <Text style={[styles.etaChipText, { color: ui.text }]}>
-            ETA {liveEtaMin} min
+        <View style={[styles.topPill, { backgroundColor: ui.headerOverlay, borderColor: ui.divider }]}>
+          <Ionicons name="sparkles" size={16} color={ui.text} />
+          <Text style={[styles.topPillText, { color: ui.text }]} numberOfLines={1}>
+            Get ready, the driver will come soon
           </Text>
         </View>
+        <View style={styles.headerSpacer} />
       </View>
 
       <Animated.View
@@ -282,8 +283,10 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
         <RideDetailsBottomSheet
           trip={trip}
           ui={ui}
-          liveEtaMin={liveEtaMin}
+          isDark={isDark}
+          etaCountdownSec={etaCountdownSec}
           headerPanHandlers={panResponder.panHandlers}
+          onToggleCollapse={onEndTrip}
         />
       </Animated.View>
     </View>
@@ -299,40 +302,37 @@ const styles = StyleSheet.create({
     height: 40,
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  headerTitleWrap: {
-    flex: 1,
-    marginHorizontal: 8,
-  },
-  headerSub: {
-    fontSize: 12,
-    marginTop: 1,
-  },
   headerOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
     paddingTop: Platform.OS === 'ios' ? 50 : 14,
     paddingBottom: 8,
     paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  etaChip: {
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  headerSpacer: {
+    width: 40,
+    height: 40,
   },
-  etaChipText: {
+  topPill: {
+    flex: 1,
+    marginHorizontal: 8,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  topPillText: {
+    flex: 1,
+    fontSize: 13,
     fontWeight: '700',
-    fontSize: 12,
   },
   map: {
     flex: 1,

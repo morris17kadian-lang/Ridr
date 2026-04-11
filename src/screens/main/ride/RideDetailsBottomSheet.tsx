@@ -1,150 +1,168 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
-
+import { Image, Pressable, StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
+import { greyCarAsset } from '../../../assets/images';
 import type { MainScreenUi } from '../mainScreenUi';
 import type { ActiveTripState } from './activeTripTypes';
+
+const ACCENT = '#FFD000';
+const SIZE_PILL_BLUE = '#2563eb';
+
+const AVATAR_COLORS = ['#7c3aed', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
+
+function avatarColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+function formatMinSec(totalSec: number): string {
+  const sec = Math.max(0, Math.floor(totalSec));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
 
 type Props = {
   trip: ActiveTripState;
   ui: MainScreenUi;
-  liveEtaMin: number;
-  /** Pan handlers for the top drag handle — pull down to show more map */
+  isDark: boolean;
+  etaCountdownSec: number;
   headerPanHandlers?: GestureResponderHandlers;
+  onToggleCollapse?: () => void;
 };
 
 export function RideDetailsBottomSheet({
   trip,
   ui,
-  liveEtaMin,
+  isDark,
+  etaCountdownSec,
   headerPanHandlers,
+  onToggleCollapse,
 }: Props) {
-  const statusLabel =
-    trip.status === 'driver_arriving'
-      ? 'Driver arriving'
-      : trip.status === 'arrived'
-        ? 'At pickup'
-        : trip.status === 'in_trip'
-          ? 'On trip'
-          : trip.status === 'completed'
-            ? 'Completed'
-            : trip.status === 'cancelled'
-              ? 'Cancelled'
-              : 'Matched';
-  const roleLabel = trip.bookedFor === 'friend' ? 'Booked for friend' : 'Booked for you';
-  const cancelReasonText =
-    trip.cancelReason === 'change_of_plans'
-      ? 'Change of plans'
-      : trip.cancelReason === 'driver_too_far'
-        ? 'Driver too far'
-        : trip.cancelReason === 'wrong_pickup'
-          ? 'Wrong pickup'
-          : trip.cancelReason === 'booked_by_mistake'
-            ? 'Booked by mistake'
-            : trip.cancelReason === 'other'
-              ? 'Driver unavailable'
-              : 'Not provided';
+  const name = trip.driverName ?? 'Driver';
+  const initials = getInitials(name);
+  const avatarBg = avatarColor(name);
+  const driverRating = trip.rating != null && trip.rating > 0 ? trip.rating : 4.5;
+  const etaLabel = `${formatMinSec(etaCountdownSec)} Mins`;
+
   return (
     <View style={[styles.card, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-      <View
-        style={styles.handleRow}
-        accessibilityRole="adjustable"
-        accessibilityLabel="Ride details sheet. Pull down to expand map."
+      {/* Black arrival bar */}
+      <Pressable
+        style={styles.arrivalBar}
+        onPress={onToggleCollapse}
+        accessibilityRole="button"
+        accessibilityLabel="Toggle ride details"
         {...(headerPanHandlers ?? {})}
       >
-        <View style={[styles.grabber, { backgroundColor: ui.textMuted }]} />
-      </View>
-      <View style={styles.sheetHeaderRow}>
-        <View>
-          <Text style={[styles.sheetEyebrow, { color: ui.textMuted }]}>Ride details</Text>
-          <Text style={[styles.driverName, { color: ui.text }]}>{trip.driverName}</Text>
-          <Text style={[styles.roleText, { color: ui.textMuted }]}>{roleLabel}</Text>
-        </View>
-        <View style={[styles.statusChip, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-          <Text style={[styles.statusChipText, { color: ui.text }]}>{statusLabel}</Text>
-        </View>
-      </View>
-      <Text style={[styles.carLine, { color: ui.textMuted }]}>{trip.carDetails}</Text>
-
-      <View style={styles.metaRow}>
-        <View style={[styles.metaPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-          <Text style={[styles.metaPillLabel, { color: ui.textMuted }]}>Fare</Text>
-          <Text style={[styles.metaPillValue, { color: ui.text }]}>
-            {trip.fareLabel ?? `$${trip.fareUsd.toFixed(2)}`}
-          </Text>
-        </View>
-        <View style={[styles.metaPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-          <Text style={[styles.metaPillLabel, { color: ui.textMuted }]}>Est. time</Text>
-          <Text style={[styles.metaPillValue, { color: ui.text }]}>{liveEtaMin} min</Text>
-        </View>
-      </View>
-
-      <View style={styles.sectionBlock}>
-        <Text style={[styles.sectionLabel, { color: ui.textMuted }]}>Vehicle</Text>
-        <View style={[styles.plate, { borderColor: ui.divider, backgroundColor: ui.softBg }]}>
-          <Text style={[styles.plateText, { color: ui.text }]}>{trip.plate}</Text>
-        </View>
-      </View>
-
-      <View style={styles.sectionBlock}>
-        <Text style={[styles.sectionLabel, { color: ui.textMuted }]}>Payment</Text>
-        <Text style={[styles.routeSmall, { color: ui.text }]}>{trip.paymentLabel ?? 'Card'}</Text>
-      </View>
-
-      <View style={styles.sectionBlock}>
-        <Text style={[styles.pinIntro, { color: ui.textMuted }]}>Tell your driver this PIN</Text>
-        <View style={[styles.pinBox, { backgroundColor: ui.softBg }]}>
-          <Text style={[styles.pinDigits, { color: ui.text }]}>{trip.driverPin}</Text>
-        </View>
-      </View>
-
-      <View style={styles.sectionBlock}>
-        <Text style={[styles.sectionLabel, { color: ui.textMuted }]}>Route</Text>
-        <Text style={[styles.routeSmall, { color: ui.text }]} numberOfLines={1}>
-          {trip.fromLabel} → {trip.toLabel}
+        <Ionicons name="hourglass-outline" size={18} color="#ffffff" />
+        <Text style={styles.arrivalBarText} numberOfLines={1}>
+          The driver will arrive in
         </Text>
-      </View>
-      {trip.status === 'completed' ? (
-        <View style={styles.sectionBlock}>
-          <Text style={[styles.sectionLabel, { color: ui.textMuted }]}>Receipt</Text>
-          <Text style={[styles.receiptLine, { color: ui.text }]}>
-            Base ${((trip.baseFare ?? trip.fareUsd)).toFixed(2)} + Fees ${(trip.fees ?? 0).toFixed(2)} + Tip ${(trip.tipAmount ?? 0).toFixed(2)}
-          </Text>
-          <Text style={[styles.receiptLine, { color: ui.text }]}>
-            Total ${(trip.totalFare ?? trip.fareUsd).toFixed(2)} · Rating {trip.rating ?? 0}/5
-          </Text>
+        <View style={styles.arrivalBarPill}>
+          <Text style={styles.arrivalBarPillText}>{etaLabel}</Text>
         </View>
-      ) : null}
-      {trip.status === 'cancelled' ? (
-        <View style={styles.sectionBlock}>
-          <Text style={[styles.sectionLabel, { color: ui.textMuted }]}>Cancellation reason</Text>
-          <Text style={[styles.routeSmall, { color: ui.text }]}>{cancelReasonText}</Text>
-        </View>
-      ) : null}
+      </Pressable>
 
-      <View style={styles.actionsRow}>
-        {trip.status === 'driver_arriving' ? (
-          <View style={[styles.infoPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-            <Ionicons name="time-outline" size={16} color={ui.textMuted} />
-            <Text style={[styles.infoPillText, { color: ui.textMuted }]}>Waiting for driver to arrive</Text>
+      {/* Sheet surface */}
+      <View style={styles.surfaceShadow}>
+        <View style={[styles.surface, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
+          {/* Vehicle */}
+          <View style={styles.vehicleRow}>
+            <View style={styles.vehicleLeft}>
+              <Text style={[styles.plateNumber, { color: ui.text }]}>{trip.plate || '—'}</Text>
+              <Text style={[styles.vehicleSub, { color: ui.textMuted }]} numberOfLines={1}>
+                {trip.carDetails || 'Vehicle'}
+              </Text>
+            </View>
+            <View style={styles.vehicleRight}>
+              <Image source={greyCarAsset} style={styles.carImg} resizeMode="contain" />
+              <View style={[styles.sizePill, { backgroundColor: SIZE_PILL_BLUE }]}>
+                <Text style={styles.sizePillText}>Medium Size</Text>
+              </View>
+            </View>
           </View>
-        ) : null}
-        {trip.status === 'arrived' ? (
-          <View style={[styles.infoPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-            <Ionicons name="car-outline" size={16} color={ui.textMuted} />
-            <Text style={[styles.infoPillText, { color: ui.textMuted }]}>Driver is starting the trip</Text>
+
+          <View style={[styles.divider, { backgroundColor: ui.divider }]} />
+
+          {/* Driver */}
+          <View style={styles.driverRow}>
+            <View style={styles.avatarWrap}>
+              <View style={[styles.driverAvatar, { backgroundColor: avatarBg }]}>
+                <Text style={styles.driverAvatarText}>{initials}</Text>
+              </View>
+              <View style={styles.ratingOverlay}>
+                <Text style={styles.ratingOverlayText}>{driverRating.toFixed(1)}</Text>
+                <Ionicons name="star" size={12} color={ACCENT} />
+              </View>
+            </View>
+
+            <View style={styles.driverMeta}>
+              <Text style={[styles.driverName, { color: ui.text }]} numberOfLines={1}>
+                {name}
+              </Text>
+              <Text style={[styles.driverSub, { color: ui.textMuted }]} numberOfLines={1}>
+                Top Rated Driver 🏆
+              </Text>
+            </View>
+
+            <View style={styles.driverActions}>
+              <View style={styles.actionBtn}>
+                <Ionicons name="call" size={18} color={ACCENT} />
+              </View>
+              <View style={styles.actionBtn}>
+                <Ionicons name="chatbubble-ellipses" size={16} color={ACCENT} />
+              </View>
+            </View>
           </View>
-        ) : null}
-        {(trip.status === 'in_trip' || trip.status === 'arrived' || trip.status === 'driver_arriving') ? (
-          <View style={[styles.infoPill, { backgroundColor: ui.softBg, borderColor: ui.divider }]}>
-            <Ionicons name="shield-checkmark-outline" size={16} color={ui.textMuted} />
-            <Text style={[styles.infoPillText, { color: ui.textMuted }]}>Only driver can update trip status</Text>
+
+          <View style={[styles.divider, { backgroundColor: ui.divider }]} />
+
+          {/* Route */}
+          <View style={styles.routeWrap}>
+            <View style={styles.routeTimeline}>
+              <View style={[styles.routeDotStart, { backgroundColor: ui.textMuted }]} />
+              <View style={[styles.routeLine, { backgroundColor: ui.divider }]} />
+              <View style={[styles.routeDotEnd, { backgroundColor: ui.text }]} />
+            </View>
+            <View style={styles.routeTexts}>
+              <View style={styles.routeItem}>
+                <Text style={[styles.routeLabel, { color: ui.textMuted }]}>Start Location</Text>
+                <Text style={[styles.routeValue, { color: ui.text }]} numberOfLines={1}>
+                  {trip.fromLabel || 'Your Current Location'}
+                </Text>
+              </View>
+              <View style={[styles.routeMidDivider, { backgroundColor: ui.divider }]} />
+              <View style={styles.routeItem}>
+                <Text style={[styles.routeLabel, { color: ui.textMuted }]}>Your Destination</Text>
+                <Text style={[styles.routeValue, { color: ui.text }]} numberOfLines={1}>
+                  {trip.toLabel || '—'}
+                </Text>
+              </View>
+            </View>
           </View>
-        ) : null}
+        </View>
       </View>
     </View>
   );
 }
+
+const shadowLift = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 14 },
+  shadowOpacity: 0.22,
+  shadowRadius: 22,
+  elevation: 16,
+} as const;
 
 const styles = StyleSheet.create({
   card: {
@@ -153,16 +171,16 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     borderWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: 0,
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingTop: 4,
-    paddingBottom: 28,
+    paddingBottom: 32,
   },
   handleRow: {
     alignItems: 'center',
     paddingTop: 8,
-    paddingBottom: 10,
-    marginHorizontal: -18,
-    paddingHorizontal: 18,
+    paddingBottom: 12,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
   },
   grabber: {
     width: 40,
@@ -170,121 +188,219 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     opacity: 0.35,
   },
-  sheetHeaderRow: {
+
+  // Black arrival bar
+  arrivalBar: {
+    ...shadowLift,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
-  },
-  sheetEyebrow: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  statusChip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  statusChipText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  driverName: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  roleText: {
-    fontSize: 12,
-  },
-  carLine: {
-    fontSize: 15,
-    marginBottom: 10,
-  },
-  metaRow: {
-    flexDirection: 'row',
+    backgroundColor: '#171717',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 12,
     gap: 10,
-    marginBottom: 10,
   },
-  metaPill: {
+  arrivalBarText: {
     flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  metaPillLabel: {
-    fontSize: 11,
-    marginBottom: 2,
-  },
-  metaPillValue: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
+    color: '#ffffff',
   },
-  sectionBlock: {
-    marginTop: 8,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  plate: {
-    alignSelf: 'flex-start',
+  arrivalBarPill: {
+    backgroundColor: '#2b2b2b',
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
   },
-  plateText: {
+  arrivalBarPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+
+  // Surface
+  surfaceShadow: {
+    ...shadowLift,
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+  },
+  surface: {
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    width: '100%',
+  },
+
+  // Vehicle
+  vehicleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  vehicleLeft: {
+    flex: 1,
+    gap: 4,
+  },
+  plateNumber: {
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
+  vehicleSub: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  vehicleRight: {
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  carImg: {
+    width: 120,
+    height: 64,
+  },
+  sizePill: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  sizePillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+
+  // Driver
+  driverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  avatarWrap: {
+    position: 'relative',
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  driverAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  driverAvatarText: {
     fontSize: 18,
     fontWeight: '800',
-    letterSpacing: 1,
+    color: '#ffffff',
   },
-  pinIntro: {
-    fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  pinBox: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  pinDigits: {
-    fontSize: 32,
-    fontWeight: '800',
-    letterSpacing: 8,
-  },
-  routeSmall: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  receiptLine: {
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  actionsRow: {
-    marginTop: 14,
+  ratingOverlay: {
+    position: 'absolute',
+    left: 0,
+    bottom: -6,
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  infoPill: {
-    width: '100%',
-    borderRadius: 10,
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    borderColor: '#e5e5e5',
   },
-  infoPillText: {
+  ratingOverlayText: {
     fontSize: 12,
+    fontWeight: '800',
+    color: '#171717',
+  },
+  driverMeta: {
+    flex: 1,
+    gap: 3,
+  },
+  driverName: {
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  driverSub: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  driverActions: {
+    flexDirection: 'row',
+    gap: 10,
+    flexShrink: 0,
+  },
+  actionBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#171717',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Route
+  routeWrap: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  routeTimeline: {
+    width: 16,
+    alignItems: 'center',
+    paddingTop: 6,
+    paddingBottom: 6,
+  },
+  routeDotStart: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  routeLine: {
+    flex: 1,
+    width: 2,
+    minHeight: 16,
+    marginVertical: 4,
+    borderRadius: 1,
+  },
+  routeDotEnd: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  routeTexts: {
+    flex: 1,
+    gap: 0,
+  },
+  routeItem: {
+    paddingVertical: 6,
+  },
+  routeMidDivider: {
+    height: StyleSheet.hairlineWidth,
+    width: '100%',
+  },
+  routeLabel: {
+    fontSize: 11,
     fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  routeValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 18,
   },
 });

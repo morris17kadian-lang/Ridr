@@ -76,7 +76,8 @@ import type {
   TripRecord,
   TripStatus,
 } from './ride/activeTripTypes';
-import { FindingDriverModal } from './ride/FindingDriverModal';
+import { FindingDriverModal, type DriverInfo } from './ride/FindingDriverModal';
+import { PresentRideTimerBar } from './ride/PresentRideTimerBar';
 import { estimateFareUsd } from './ride/rideFare';
 import { interpolateRoutePoint } from './ride/routeGeometry';
 import {
@@ -2652,6 +2653,22 @@ export default function MainScreen() {
           defaultCard != null &&
           cards.some((c) => c.id === defaultCard)
         }
+        drivers={
+          activeTrip?.driverName
+            ? ([{
+                name: activeTrip.driverName,
+                carDetails: activeTrip.carDetails ?? 'Unknown vehicle',
+                plate: activeTrip.plate ?? '',
+                rating: activeTrip.driverRating ?? 4.9,
+                etaLabel: rideEtaLabel,
+              }] as DriverInfo[])
+            : ([
+                { name: 'Marcus W.', carDetails: 'Toyota Corolla · Silver', plate: 'PA 4821', rating: 4.9, etaLabel: '2 min' },
+                { name: 'Diana R.', carDetails: 'Honda Fit · White', plate: 'PB 3310', rating: 4.8, etaLabel: '4 min' },
+                { name: 'Trevor A.', carDetails: 'Nissan Tiida · Blue', plate: 'PC 7754', rating: 4.7, etaLabel: '6 min' },
+                { name: 'Sandra M.', carDetails: 'Toyota Axio · Black', plate: 'PD 1192', rating: 5.0, etaLabel: '8 min' },
+              ] as DriverInfo[])
+        }
       />
 
       {/* Map: short when sheet is up, full window when sheet is minimized */}
@@ -3048,12 +3065,22 @@ export default function MainScreen() {
           style={[StyleSheet.absoluteFillObject, { backgroundColor: ui.panelBg, borderTopLeftRadius: 28, borderTopRightRadius: 28 }]}
         />
       
+      {presentRide ? (
+        <View style={{ position: 'absolute', left: 12, right: 12, top: 14, zIndex: 3 }}>
+          <PresentRideTimerBar
+            trip={presentRide}
+            ui={ui}
+            onPress={() => {
+              setActiveTrip(presentRide);
+              setScreen('activeRide');
+            }}
+          />
+        </View>
+      ) : null}
+
       <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={[
-          styles.content,
-          presentRide ? { paddingTop: 112 } : null,
-        ]}
+        style={{ flex: 1, marginTop: presentRide ? 76 : 0 }}
+        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
         bounces={true}
@@ -3077,40 +3104,8 @@ export default function MainScreen() {
           <View style={styles.dragHandle} />
         </View>
 
-        {presentRide ? (
-        <View style={{ position: 'absolute', left: 12, right: 12, top: 14, zIndex: 12 }}>
-          <Pressable
-            style={{
-              backgroundColor: '#fde68a',
-              borderColor: '#f59e0b',
-              borderWidth: 1,
-              borderRadius: 14,
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-            }}
-            onPress={() => {
-              setActiveTrip(presentRide);
-              setScreen('activeRide');
-            }}
-          >
-            <Text style={{ color: '#713f12', fontWeight: '800', fontSize: 13 }}>
-              Current ride · {presentRide.bookedFor === 'friend' ? 'Booked for friend' : 'Booked for you'}
-            </Text>
-            <Text style={{ color: '#78350f', marginTop: 2 }} numberOfLines={1}>
-              {presentRide.driverName} · {presentRide.carDetails} · PIN {presentRide.driverPin}
-            </Text>
-            <Text style={{ color: '#78350f', marginTop: 2 }} numberOfLines={1}>
-              {presentRide.fromLabel} → {presentRide.toLabel}
-            </Text>
-            <Text style={{ color: '#78350f', marginTop: 4, fontWeight: '600' }} numberOfLines={1}>
-              Tap to open live trip details
-            </Text>
-          </Pressable>
-        </View>
-      ) : null}
-
         {/* Destination Input Card */}
-        <View style={[styles.destinationCard, { backgroundColor: ui.cardBg }]}>
+        <View style={[styles.destinationCard, { backgroundColor: ui.cardBg }, presentRide ? { marginTop: -22 } : null]}>
           <View style={[styles.destinationSearchGroup, { backgroundColor: ui.softBg }]}>
             <View
               style={[
