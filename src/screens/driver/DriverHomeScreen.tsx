@@ -1077,14 +1077,13 @@ export default function DriverHomeScreen() {
         return (
           <Modal
             visible
-            animationType="slide"
+            animationType="fade"
             transparent
             statusBarTranslucent
             onRequestClose={() => handleDecline(request.id)}
           >
-            <View style={styles.modalOverlay} />
+            <View style={styles.requestModalCenteredOverlay}>
             <View style={[styles.requestModalSheet, { backgroundColor: ui.panelBg }]}>
-              <View style={styles.modalHandle} />
               {incomingRequests.length > 1 && (
                 <View style={styles.requestModalQueueBadge}>
                   <Text style={[styles.requestModalQueueText, { color: ui.textMuted }]}>
@@ -1132,6 +1131,7 @@ export default function DriverHomeScreen() {
                 isDark={isDark}
                 borderColor={ui.border}
               />
+            </View>
             </View>
           </Modal>
         );
@@ -1370,15 +1370,18 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 6,
   },
+  requestModalCenteredOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
   requestModalSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    width: '100%',
+    borderRadius: 28,
     padding: 20,
-    paddingBottom: 44,
+    paddingBottom: 24,
     gap: 14,
   },
   requestModalQueueBadge: {
