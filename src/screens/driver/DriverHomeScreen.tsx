@@ -1485,12 +1485,11 @@ export default function DriverHomeScreen() {
               <View style={styles.requestModalHeader}>
                 <View style={styles.requestModalHeaderLeft}>
                   <View style={styles.requestModalLiveDot} />
-                  <View style={styles.requestModalHeaderTextWrap}>
-                    <Text style={[styles.requestModalEyebrow, { color: ui.text }]}>Incoming Request</Text>
-                    <Text style={[styles.requestModalSubhead, { color: ui.textMuted }]}>Respond before another driver accepts it.</Text>
-                  </View>
+                  <Text style={[styles.requestModalEyebrow, { color: ui.text }]}>{request.riderName}</Text>
                 </View>
-                <Ionicons name="notifications" size={18} color={ui.text} />
+                <View style={styles.requestModalPersonBadge}>
+                  <Ionicons name="person" size={16} color="#ffffff" />
+                </View>
               </View>
               {/* Mini map */}
               <View style={styles.requestModalMap}>
@@ -1885,10 +1884,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  requestModalHeaderTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
   requestModalLiveDot: {
     width: 11,
     height: 11,
@@ -1896,13 +1891,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#ef4444',
   },
   requestModalEyebrow: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '900',
     color: '#171717',
   },
-  requestModalSubhead: {
-    fontSize: 12,
-    fontWeight: '600',
+  requestModalPersonBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   requestModalMap: {
     height: 160,
