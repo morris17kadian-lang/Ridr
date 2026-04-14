@@ -1073,10 +1073,12 @@ export default function DriverHomeScreen() {
       {/* ── Incoming request modal ── */}
       {(() => {
         const request = incomingRequests[0];
-        if (!request || !isOnline) return null;
         const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
+        if (!request || !isOnline || isBusy) return null;
+        
         return (
           <Modal
+            key={request.id}
             visible
             animationType="fade"
             transparent
