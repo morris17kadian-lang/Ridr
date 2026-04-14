@@ -209,7 +209,6 @@ type SwipeToActionProps = {
 function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: SwipeToActionProps) {
   const [drag, setDrag] = useState(0);
   const [trackWidth, setTrackWidth] = useState(0);
-  const trackXInWindow = useRef(0);
 
   const halfTrack = Math.max(0, (trackWidth - DRIVER_THUMB_W) / 2);
 
@@ -218,25 +217,18 @@ function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: S
       PanResponder.create({
         onStartShouldSetPanResponder: () => !disabled,
         onStartShouldSetPanResponderCapture: () => !disabled,
-        onMoveShouldSetPanResponder: () => !disabled,
-        onMoveShouldSetPanResponderCapture: () => !disabled,
+        onMoveShouldSetPanResponder: (_, gs) => !disabled && Math.abs(gs.dx) > 3,
+        onMoveShouldSetPanResponderCapture: (_, gs) => !disabled && Math.abs(gs.dx) > 3,
         onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: (_, g) => {
-          const raw = g.moveX - trackXInWindow.current - trackWidth / 2;
-          setDrag(Math.max(-halfTrack, Math.min(halfTrack, raw)));
+        onPanResponderMove: (_, gs) => {
+          setDrag(Math.max(-halfTrack, Math.min(halfTrack, gs.dx)));
         },
-        onPanResponderMove: (_, g) => {
-          const raw = g.moveX - trackXInWindow.current - trackWidth / 2;
-          setDrag(Math.max(-halfTrack, Math.min(halfTrack, raw)));
-        },
-        onPanResponderRelease: (_, g) => {
-          const raw = g.moveX - trackXInWindow.current - trackWidth / 2;
-          const clamped = Math.max(-halfTrack, Math.min(halfTrack, raw));
-          if (halfTrack > 0 && clamped >= halfTrack * 0.65) {
+        onPanResponderRelease: (_, gs) => {
+          if (halfTrack > 0 && gs.dx >= halfTrack * 0.65) {
             setDrag(halfTrack);
             hapticSuccess();
             setTimeout(() => { setDrag(0); onAccept(); }, 180);
-          } else if (halfTrack > 0 && clamped <= -halfTrack * 0.65) {
+          } else if (halfTrack > 0 && gs.dx <= -halfTrack * 0.65) {
             setDrag(-halfTrack);
             hapticMedium();
             setTimeout(() => { setDrag(0); onDecline(); }, 180);
@@ -262,9 +254,6 @@ function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: S
       }]}
       {...panResponder.panHandlers}
       onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-      onTouchStart={(e) => {
-        trackXInWindow.current = e.nativeEvent.pageX - e.nativeEvent.locationX;
-      }}
     >
       {/* Red (decline) fill — grows leftward from centre */}
       <View
@@ -1084,13 +1073,6 @@ export default function DriverHomeScreen() {
           >
             <View style={styles.requestModalCenteredOverlay}>
             <View style={[styles.requestModalSheet, { backgroundColor: ui.panelBg }]}>
-              {incomingRequests.length > 1 && (
-                <View style={styles.requestModalQueueBadge}>
-                  <Text style={[styles.requestModalQueueText, { color: ui.textMuted }]}>
-                    +{incomingRequests.length - 1} more waiting
-                  </Text>
-                </View>
-              )}
               {/* Mini map */}
               <View style={styles.requestModalMap}>
                 <MapView
