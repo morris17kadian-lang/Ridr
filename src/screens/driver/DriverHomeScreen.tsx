@@ -208,43 +208,50 @@ type SwipeToActionProps = {
 };
 function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: SwipeToActionProps) {
   const [drag, setDrag] = useState(0);
-  const [trackWidth, setTrackWidth] = useState(0);
+  const [halfTrack, setHalfTrack] = useState(0);
 
-  const halfTrack = Math.max(0, (trackWidth - DRIVER_THUMB_W) / 2);
+  // Stable refs so the panResponder (created once) always sees fresh values
+  const halfTrackRef  = useRef(0);
+  const disabledRef   = useRef(disabled);
+  const onAcceptRef   = useRef(onAccept);
+  const onDeclineRef  = useRef(onDecline);
+  disabledRef.current  = disabled;
+  onAcceptRef.current  = onAccept;
+  onDeclineRef.current = onDecline;
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => !disabled,
-        onStartShouldSetPanResponderCapture: () => !disabled,
-        onMoveShouldSetPanResponder: (_, gs) => !disabled && Math.abs(gs.dx) > 3,
-        onMoveShouldSetPanResponderCapture: (_, gs) => !disabled && Math.abs(gs.dx) > 3,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderMove: (_, gs) => {
-          setDrag(Math.max(-halfTrack, Math.min(halfTrack, gs.dx)));
-        },
-        onPanResponderRelease: (_, gs) => {
-          if (halfTrack > 0 && gs.dx >= halfTrack * 0.65) {
-            setDrag(halfTrack);
-            hapticSuccess();
-            setTimeout(() => { setDrag(0); onAccept(); }, 180);
-          } else if (halfTrack > 0 && gs.dx <= -halfTrack * 0.65) {
-            setDrag(-halfTrack);
-            hapticMedium();
-            setTimeout(() => { setDrag(0); onDecline(); }, 180);
-          } else {
-            setDrag(0);
-          }
-        },
-      }),
-    [disabled, halfTrack, onAccept, onDecline]
-  );
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabledRef.current,
+      onStartShouldSetPanResponderCapture: () => !disabledRef.current,
+      onMoveShouldSetPanResponder: (_, gs) => !disabledRef.current && Math.abs(gs.dx) > 3,
+      onMoveShouldSetPanResponderCapture: (_, gs) => !disabledRef.current && Math.abs(gs.dx) > 3,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, gs) => {
+        const half = halfTrackRef.current;
+        setDrag(Math.max(-half, Math.min(half, gs.dx)));
+      },
+      onPanResponderRelease: (_, gs) => {
+        const half = halfTrackRef.current;
+        if (half > 0 && gs.dx >= half * 0.65) {
+          setDrag(half);
+          hapticSuccess();
+          setTimeout(() => { setDrag(0); onAcceptRef.current(); }, 180);
+        } else if (half > 0 && gs.dx <= -half * 0.65) {
+          setDrag(-half);
+          hapticMedium();
+          setTimeout(() => { setDrag(0); onDeclineRef.current(); }, 180);
+        } else {
+          setDrag(0);
+        }
+      },
+    })
+  ).current;
 
   const thumbLeft = halfTrack + drag;
-  const redFillWidth  = drag < 0 ? -drag : 0;
-  const greenFillWidth = drag > 0 ?  drag : 0;
+  const redFillWidth   = drag < 0 ? -drag : 0;
+  const greenFillWidth = drag > 0  ?  drag : 0;
   const declineOpacity = halfTrack > 0 ? Math.min(1, Math.max(0.3, (-drag) / halfTrack)) : 0.3;
-  const acceptOpacity  = halfTrack > 0 ? Math.min(1, Math.max(0.3, drag   / halfTrack)) : 0.3;
+  const acceptOpacity  = halfTrack > 0 ? Math.min(1, Math.max(0.3,   drag  / halfTrack)) : 0.3;
 
   return (
     <View
@@ -253,17 +260,22 @@ function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: S
         borderColor,
       }]}
       {...panResponder.panHandlers}
-      onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        const h = Math.max(0, (w - DRIVER_THUMB_W) / 2);
+        halfTrackRef.current = h;
+        setHalfTrack(h);
+      }}
     >
       {/* Red (decline) fill — grows leftward from centre */}
       <View
         pointerEvents="none"
-        style={[styles.swipeFill, { backgroundColor: '#dc2626', right: trackWidth / 2, width: redFillWidth, opacity: redFillWidth > 0 ? 1 : 0 }]}
+        style={[styles.swipeFill, { backgroundColor: '#dc2626', right: halfTrack + DRIVER_THUMB_W / 2, width: redFillWidth, opacity: redFillWidth > 0 ? 1 : 0 }]}
       />
       {/* Green (accept) fill — grows rightward from centre */}
       <View
         pointerEvents="none"
-        style={[styles.swipeFill, { backgroundColor: '#16a34a', left: trackWidth / 2, width: greenFillWidth, opacity: greenFillWidth > 0 ? 1 : 0 }]}
+        style={[styles.swipeFill, { backgroundColor: '#16a34a', left: halfTrack + DRIVER_THUMB_W / 2, width: greenFillWidth, opacity: greenFillWidth > 0 ? 1 : 0 }]}
       />
       <Text style={[styles.swipeDeclineLabel, { opacity: declineOpacity }]} pointerEvents="none">← Decline</Text>
       <Text style={[styles.swipeAcceptLabel, { opacity: acceptOpacity }]} pointerEvents="none">Accept →</Text>
