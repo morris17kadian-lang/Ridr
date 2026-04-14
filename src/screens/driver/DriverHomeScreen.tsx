@@ -414,7 +414,6 @@ export default function DriverHomeScreen() {
   }, [profileEmail, profileFirstName, profileLastName, profilePhone, profileUsername]);
 
   const name = profileFirstName || user?.staffCode || 'Driver';
-  const activeRequestCount = incomingRequests.length;
   const progressIndex = currentTrip ? DRIVER_PROGRESS_STEPS.findIndex((step) => step.key === currentTrip.status) : -1;
   const currentTripBadge = currentTrip ? getTripBadge(currentTrip.status) : null;
   const currentTripPrimaryAction = currentTrip ? getPrimaryAction(currentTrip.status) : null;
@@ -884,25 +883,6 @@ export default function DriverHomeScreen() {
         </View>
       ) : null}
 
-      <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: ui.text }]}>Incoming requests</Text>
-        <Text style={[styles.sectionSub, { color: ui.textMuted }]}>{isOnline ? `${activeRequestCount} nearby` : 'Go online to receive requests'}</Text>
-      </View>
-      {incomingRequests.length === 0 ? (
-        <View style={[styles.emptyState, { backgroundColor: ui.soft }]}>
-          <Ionicons name="car-sport-outline" size={22} color={ui.textMuted} />
-          <Text style={[styles.emptyTitle, { color: ui.text }]}>No requests in queue</Text>
-          <Text style={[styles.emptySub, { color: ui.textMuted }]}>New rider requests will appear here.</Text>
-        </View>
-      ) : (
-        <View style={[styles.emptyState, { backgroundColor: ui.soft }]}>
-          <Ionicons name="radio" size={22} color={ui.tabActive} />
-          <Text style={[styles.emptyTitle, { color: ui.text }]}>
-            {activeRequestCount} incoming {activeRequestCount === 1 ? 'request' : 'requests'}
-          </Text>
-          <Text style={[styles.emptySub, { color: ui.textMuted }]}>Requests pop up automatically.</Text>
-        </View>
-      )}
     </>
   );
 
