@@ -1,9 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -192,6 +195,59 @@ function getStatusSummary(status: DriverTripStatus, paymentLabel: 'Card' | 'Cash
     case 'cancelled':
       return 'This trip has been cancelled.';
   }
+}
+
+type SwipeToActionProps = {
+  onAccept: () => void;
+  onDecline: () => void;
+  disabled: boolean;
+  trackBorder: string;
+  trackBg: string;
+  textMuted: string;
+};
+function SwipeToAction({ onAccept, onDecline, disabled, trackBorder, trackBg, textMuted }: SwipeToActionProps) {
+  const pan = useRef(new Animated.Value(0)).current;
+  const THRESHOLD = 70;
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabled,
+      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 4,
+      onPanResponderMove: (_, gs) => {
+        pan.setValue(Math.max(-110, Math.min(110, gs.dx)));
+      },
+      onPanResponderRelease: (_, gs) => {
+        if (gs.dx > THRESHOLD) {
+          Animated.spring(pan, { toValue: 130, useNativeDriver: true }).start(() => {
+            pan.setValue(0);
+            onAccept();
+          });
+        } else if (gs.dx < -THRESHOLD) {
+          Animated.spring(pan, { toValue: -130, useNativeDriver: true }).start(() => {
+            pan.setValue(0);
+            onDecline();
+          });
+        } else {
+          Animated.spring(pan, { toValue: 0, useNativeDriver: true }).start();
+        }
+      },
+    })
+  ).current;
+
+  const declineOpacity = pan.interpolate({ inputRange: [-110, -20, 0], outputRange: [1, 0.55, 0.25], extrapolate: 'clamp' });
+  const acceptOpacity  = pan.interpolate({ inputRange: [0, 20, 110],  outputRange: [0.25, 0.55, 1], extrapolate: 'clamp' });
+
+  return (
+    <View style={[styles.swipeTrack, { borderColor: trackBorder }]}>
+      <Animated.Text style={[styles.swipeDeclineLabel, { opacity: declineOpacity }]}>← Decline</Animated.Text>
+      <Animated.View
+        style={[styles.swipeThumb, { backgroundColor: trackBg, transform: [{ translateX: pan }] }]}
+        {...panResponder.panHandlers}
+      >
+        <Ionicons name="swap-horizontal-outline" size={18} color={textMuted} />
+      </Animated.View>
+      <Animated.Text style={[styles.swipeAcceptLabel, { opacity: acceptOpacity }]}>Accept →</Animated.Text>
+    </View>
+  );
 }
 
 export default function DriverHomeScreen() {
@@ -772,73 +828,67 @@ export default function DriverHomeScreen() {
         </View>
       ) : null}
 
-      <View style={[styles.sectionCard, { backgroundColor: ui.card, borderColor: ui.border }]}> 
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: ui.text }]}>Incoming requests</Text>
-          <Text style={[styles.sectionSub, { color: ui.textMuted }]}>{isOnline ? `${activeRequestCount} nearby` : 'Go online to receive requests'}</Text>
+      <View style={styles.sectionHeader}>
+        <Text style={[styles.sectionTitle, { color: ui.text }]}>Incoming requests</Text>
+        <Text style={[styles.sectionSub, { color: ui.textMuted }]}>{isOnline ? `${activeRequestCount} nearby` : 'Go online to receive requests'}</Text>
+      </View>
+      {incomingRequests.length === 0 ? (
+        <View style={[styles.emptyState, { backgroundColor: ui.soft }]}>
+          <Ionicons name="car-sport-outline" size={22} color={ui.textMuted} />
+          <Text style={[styles.emptyTitle, { color: ui.text }]}>No requests in queue</Text>
+          <Text style={[styles.emptySub, { color: ui.textMuted }]}>New rider requests will appear here.</Text>
         </View>
-        {incomingRequests.length === 0 ? (
-          <View style={[styles.emptyState, { backgroundColor: ui.soft }]}> 
-            <Ionicons name="car-sport-outline" size={22} color={ui.textMuted} />
-            <Text style={[styles.emptyTitle, { color: ui.text }]}>No requests in queue</Text>
-            <Text style={[styles.emptySub, { color: ui.textMuted }]}>New rider requests will appear here.</Text>
-          </View>
-        ) : (
-          incomingRequests.map((request) => (
-            <View key={request.id} style={[styles.requestCard, { borderColor: ui.border, backgroundColor: ui.soft }]}> 
+      ) : (
+        <>
+          {incomingRequests.map((request) => (
+            <View key={request.id} style={[styles.requestCard, { backgroundColor: ui.card, borderColor: ui.border }]}>
+              {/* Top row: name + fare */}
               <View style={styles.requestTopRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.requestName, { color: ui.text }]}>{request.riderName}</Text>
-                  <Text style={[styles.requestMeta, { color: ui.textMuted }]}>{request.eta} • {request.distance}</Text>
+                  <Text style={[styles.requestMeta, { color: ui.textMuted }]}>{request.eta} · {request.distance}</Text>
                 </View>
-                <Text style={[styles.requestFare, { color: ui.text }]}>{request.fare}</Text>
-              </View>
-              <View style={styles.requestMetaChips}>
-                <View style={[styles.inlineBadge, { backgroundColor: request.paymentLabel === 'Cash' ? '#dcfce7' : '#dbeafe' }]}>
-                  <Text style={[styles.inlineBadgeText, { color: request.paymentLabel === 'Cash' ? '#166534' : '#1d4ed8' }]}>{request.paymentLabel}</Text>
-                </View>
-              </View>
-              <View style={styles.routeBlock}>
-                <View style={styles.routeColumn}>
-                  <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
-                  <View style={[styles.routeLine, { backgroundColor: ui.border }]} />
-                  <View style={[styles.routeDot, { backgroundColor: ui.accent }]} />
-                </View>
-                <View style={styles.routeLabels}>
-                  <Text style={[styles.routeLabel, { color: ui.textMuted }]}>Pickup</Text>
-                  <Text style={[styles.routeValue, { color: ui.text }]}>{request.pickup}</Text>
-                  <Text style={[styles.routeLabel, { color: ui.textMuted, marginTop: 10 }]}>Dropoff</Text>
-                  <Text style={[styles.routeValue, { color: ui.text }]}>{request.dropoff}</Text>
+                <View style={styles.requestFareBlock}>
+                  <Text style={[styles.requestFare, { color: '#16a34a' }]}>{request.fare}</Text>
+                  <LinearGradient
+                    colors={request.paymentLabel === 'Cash' ? ['#16a34a', '#15803d'] : ['#2563eb', '#1d4ed8']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={[styles.inlineBadge, { alignSelf: 'flex-end' }]}
+                  >
+                    <Text style={styles.inlineBadgeTextBold}>{request.paymentLabel}</Text>
+                  </LinearGradient>
                 </View>
               </View>
-              <View style={styles.requestActions}>
-                <Pressable style={[styles.rejectButton, { borderColor: ui.border }]} onPress={() => handleDecline(request.id)}>
-                  <Text style={[styles.rejectButtonText, { color: ui.text }]}>Decline</Text>
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.acceptButton,
-                    {
-                      backgroundColor:
-                        currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled'
-                          ? ui.soft
-                          : ui.accent,
-                    },
-                  ]}
-                  onPress={() => handleAccept(request.id)}
-                  disabled={!isOnline || !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled')}
-                >
-                  <Text style={styles.acceptButtonText}>
-                    {currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled'
-                      ? 'Finish current trip first'
-                      : 'Accept request'}
-                  </Text>
-                </Pressable>
+
+              {/* Route pill with connecting line */}
+              <View style={[styles.routePill, { backgroundColor: ui.soft }]}>
+                <View style={styles.routeLineContainer}>
+                  <View style={styles.routeDotsCol}>
+                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
+                    <View style={[styles.routeConnector, { backgroundColor: ui.border }]} />
+                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
+                  </View>
+                  <View style={styles.routeTextsCol}>
+                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.pickup}</Text>
+                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.dropoff}</Text>
+                  </View>
+                </View>
               </View>
+
+              {/* Swipe to accept / decline */}
+              <SwipeToAction
+                onAccept={() => handleAccept(request.id)}
+                onDecline={() => handleDecline(request.id)}
+                disabled={!isOnline || !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled')}
+                trackBorder={ui.border}
+                trackBg={ui.soft}
+                textMuted={ui.textMuted}
+              />
             </View>
-          ))
-        )}
-      </View>
+          ))}
+        </>
+      )}
     </>
   );
 
@@ -1615,10 +1665,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   requestCard: {
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    padding: 14,
-    gap: 12,
+    padding: 16,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.09,
+    shadowRadius: 10,
+    elevation: 5,
   },
   requestTopRow: {
     flexDirection: 'row',
@@ -1626,15 +1681,20 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   requestName: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
+    lineHeight: 20,
   },
   requestMeta: {
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 1,
+  },
+  requestFareBlock: {
+    alignItems: 'flex-end',
+    gap: 4,
   },
   requestFare: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '900',
   },
   requestMetaChips: {
@@ -1648,10 +1708,63 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   inlineBadgeText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
+  },
+  inlineBadgeTextBold: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  routePill: {
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  routeLineContainer: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+  },
+  routeDotsCol: {
+    width: 12,
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
+  routeConnector: {
+    flex: 1,
+    width: 2,
+    borderRadius: 1,
+    marginVertical: 3,
+  },
+  routeTextsCol: {
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+    gap: 12,
+  },
+  routePillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  /* legacy — kept for any other references */
+  routePillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  routeLineCol: {
+    width: 14,
+    alignItems: 'center',
+  },
+  routePillDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 24,
   },
   routeBlock: {
     flexDirection: 'row',
@@ -1663,8 +1776,8 @@ const styles = StyleSheet.create({
     width: 14,
   },
   routeDot: {
-    width: 10,
-    height: 10,
+    width: 9,
+    height: 9,
     borderRadius: 5,
   },
   routeLine: {
@@ -1700,21 +1813,56 @@ const styles = StyleSheet.create({
   },
   rejectButtonText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   acceptButton: {
-    flex: 1.3,
+    flex: 1,
     minHeight: 44,
     borderRadius: 14,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
     paddingHorizontal: 10,
   },
   acceptButtonText: {
-    color: '#171717',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '900',
     textAlign: 'center',
+  },
+  swipeTrack: {
+    height: 52,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    overflow: 'hidden',
+  },
+  swipeThumb: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.14,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  swipeDeclineLabel: {
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  swipeAcceptLabel: {
+    color: '#16a34a',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   tripHistoryCard: {
     borderRadius: 18,
