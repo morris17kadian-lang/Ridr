@@ -13,6 +13,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -69,6 +70,7 @@ type DriverTripStatus = Extract<TripStatus, 'matched' | 'driver_arriving' | 'arr
 
 type DriverTrip = IncomingRequest & {
   status: DriverTripStatus;
+  startPin: string;
   acceptedAtMs: number;
   arrivedAtMs?: number;
   startedAtMs?: number;
@@ -208,6 +210,10 @@ function formatMinSec(totalSec: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function generateTripStartPin(): string {
+  return String(1000 + Math.floor(Math.random() * 9000));
+}
+
 function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: string; icon: keyof typeof Ionicons.glyphMap } {
   const etaMinutes = parseEtaMinutes(trip.eta);
   const etaCountdownSec = Math.max(0, etaMinutes * 60 - ((Date.now() - trip.acceptedAtMs) / 1000));
@@ -335,6 +341,9 @@ export default function DriverHomeScreen() {
   const [currentTrip, setCurrentTrip] = useState<DriverTrip | null>(null);
   const [currentTripExpanded, setCurrentTripExpanded] = useState(true);
   const [tripUiTick, setTripUiTick] = useState(0);
+  const [tripPinModalVisible, setTripPinModalVisible] = useState(false);
+  const [tripPinInput, setTripPinInput] = useState('');
+  const [tripPinError, setTripPinError] = useState('');
   const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || 'Driver');
   const [profileLastName, setProfileLastName] = useState(user?.lastName?.trim() || '');
   const [profileEmail, setProfileEmail] = useState(user?.email ?? 'driver@ridr.app');
@@ -465,6 +474,14 @@ export default function DriverHomeScreen() {
     }
   }, [currentTrip?.id, currentTrip?.status]);
 
+  useEffect(() => {
+    if (!currentTrip || currentTrip.status === 'cancelled' || currentTrip.status === 'completed' || currentTrip.status === 'in_trip') {
+      setTripPinModalVisible(false);
+      setTripPinInput('');
+      setTripPinError('');
+    }
+  }, [currentTrip]);
+
   const name = profileFirstName || user?.staffCode || 'Driver';
   const progressIndex = currentTrip ? DRIVER_PROGRESS_STEPS.findIndex((step) => step.key === currentTrip.status) : -1;
   const currentTripPrimaryAction = currentTrip ? getPrimaryAction(currentTrip.status) : null;
@@ -506,6 +523,7 @@ export default function DriverHomeScreen() {
     setCurrentTrip({
       ...request,
       status: 'matched',
+      startPin: generateTripStartPin(),
       acceptedAtMs: Date.now(),
     });
     setIncomingRequests((prev) => prev.filter((item) => item.id !== requestId));
@@ -519,15 +537,45 @@ export default function DriverHomeScreen() {
 
   const advanceTrip = () => {
     if (!currentTrip) return;
+
+    if (currentTrip.status === 'arrived') {
+      hapticSelection();
+      setTripPinInput('');
+      setTripPinError('');
+      setTripPinModalVisible(true);
+      return;
+    }
+
     hapticMedium();
     setCurrentTrip((prev) => {
       if (!prev) return prev;
       if (prev.status === 'matched') return { ...prev, status: 'driver_arriving' };
       if (prev.status === 'driver_arriving') return { ...prev, status: 'arrived', arrivedAtMs: Date.now() };
-      if (prev.status === 'arrived') return { ...prev, status: 'in_trip', startedAtMs: Date.now() };
       if (prev.status === 'in_trip') return { ...prev, status: 'completed', completedAtMs: Date.now() };
       return prev;
     });
+  };
+
+  const confirmTripStartPin = () => {
+    if (!currentTrip) return;
+
+    const normalizedPin = tripPinInput.replace(/\D/g, '').slice(0, 4);
+    if (normalizedPin.length !== 4) {
+      setTripPinError('Enter the 4-digit rider PIN to start the trip.');
+      return;
+    }
+
+    if (normalizedPin !== currentTrip.startPin) {
+      hapticLight();
+      setTripPinError('That PIN does not match the rider confirmation code.');
+      return;
+    }
+
+    hapticSuccess();
+    setTripPinModalVisible(false);
+    setTripPinInput('');
+    setTripPinError('');
+    setCurrentTrip((prev) => (prev ? { ...prev, status: 'in_trip', startedAtMs: Date.now() } : prev));
   };
 
   const cancelCurrentTrip = () => {
@@ -542,6 +590,7 @@ export default function DriverHomeScreen() {
           style: 'destructive',
           onPress: () => {
             hapticLight();
+            setTripPinModalVisible(false);
             setCurrentTrip((prev) => (prev ? { ...prev, status: 'cancelled', cancelledAtMs: Date.now() } : prev));
           },
         },
@@ -551,6 +600,7 @@ export default function DriverHomeScreen() {
 
   const clearResolvedTrip = () => {
     hapticSelection();
+    setTripPinModalVisible(false);
     setCurrentTrip(null);
   };
 
@@ -1286,6 +1336,59 @@ export default function DriverHomeScreen() {
         );
       })()}
 
+      <Modal
+        visible={tripPinModalVisible}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => {
+          setTripPinModalVisible(false);
+          setTripPinInput('');
+          setTripPinError('');
+        }}
+      >
+        <View style={styles.requestModalCenteredOverlay}>
+          <View style={[styles.tripPinModalSheet, { backgroundColor: ui.panelBg }]}> 
+            <Text style={[styles.modalTitle, { color: ui.text }]}>Start trip</Text>
+            <Text style={[styles.tripPinModalCopy, { color: ui.textMuted }]}>Enter the 4-digit PIN the rider received after you accepted this trip.</Text>
+            <TextInput
+              value={tripPinInput}
+              onChangeText={(value) => {
+                setTripPinInput(value.replace(/\D/g, '').slice(0, 4));
+                if (tripPinError) setTripPinError('');
+              }}
+              keyboardType="number-pad"
+              maxLength={4}
+              placeholder="Enter rider PIN"
+              placeholderTextColor={ui.textMuted}
+              style={[styles.tripPinInput, { color: ui.text, borderColor: tripPinError ? '#dc2626' : ui.border, backgroundColor: ui.soft }]}
+            />
+            {tripPinError ? (
+              <Text style={styles.tripPinErrorText}>{tripPinError}</Text>
+            ) : null}
+            <View style={styles.tripPinActions}>
+              <Pressable
+                style={[styles.secondaryButton, styles.tripPinSecondaryButton, { borderColor: ui.border, backgroundColor: ui.soft }]}
+                onPress={() => {
+                  setTripPinModalVisible(false);
+                  setTripPinInput('');
+                  setTripPinError('');
+                }}
+              >
+                <Text style={[styles.secondaryButtonText, { color: ui.text }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.primaryButton, styles.tripPinPrimaryButton, { backgroundColor: ui.accent }]}
+                onPress={confirmTripStartPin}
+              >
+                <Ionicons name="key-outline" size={16} color="#171717" />
+                <Text style={styles.primaryButtonText}>Verify PIN</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Earnings detail modal ── */}
       <Modal visible={earningsModal === 'earnings'} animationType="slide" transparent onRequestClose={() => setEarningsModal(null)}>
         <Pressable style={styles.modalOverlay} onPress={() => setEarningsModal(null)} />
@@ -1539,6 +1642,46 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     marginHorizontal: -4,
+  },
+  tripPinModalSheet: {
+    width: '100%',
+    borderRadius: 24,
+    padding: 22,
+    gap: 14,
+  },
+  tripPinModalCopy: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  tripPinInput: {
+    minHeight: 54,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 16,
+    textAlign: 'center',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 6,
+  },
+  tripPinErrorText: {
+    marginTop: -4,
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  tripPinActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  tripPinPrimaryButton: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  tripPinSecondaryButton: {
+    minWidth: 110,
+    justifyContent: 'center',
   },
   requestModalQueueBadge: {
     alignSelf: 'center',
