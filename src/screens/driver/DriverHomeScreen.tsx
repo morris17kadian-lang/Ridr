@@ -196,6 +196,38 @@ function getStatusSummary(status: DriverTripStatus, paymentLabel: 'Card' | 'Cash
   }
 }
 
+function parseEtaMinutes(etaLabel: string): number {
+  const match = etaLabel.match(/(\d+)/);
+  return match ? Math.max(1, Number(match[1])) : 4;
+}
+
+function formatMinSec(totalSec: number): string {
+  const sec = Math.max(0, Math.floor(totalSec));
+  const minutes = Math.floor(sec / 60);
+  const seconds = sec % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: string; icon: keyof typeof Ionicons.glyphMap } {
+  const etaMinutes = parseEtaMinutes(trip.eta);
+  const etaCountdownSec = Math.max(0, etaMinutes * 60 - ((Date.now() - trip.acceptedAtMs) / 1000));
+
+  switch (trip.status) {
+    case 'matched':
+      return { title: 'Ride accepted. Head to pickup', pill: `${formatMinSec(etaCountdownSec)} Mins`, icon: 'checkmark-circle-outline' };
+    case 'driver_arriving':
+      return { title: 'You are on the way to the rider', pill: `${formatMinSec(etaCountdownSec)} Mins`, icon: 'navigate-outline' };
+    case 'arrived':
+      return { title: 'You have arrived at pickup', pill: 'Arrived', icon: 'location-outline' };
+    case 'in_trip':
+      return { title: 'Trip in progress', pill: tick % 2 === 0 ? 'Live' : 'En route', icon: 'car-sport-outline' };
+    case 'completed':
+      return { title: 'Trip completed', pill: 'Done', icon: 'checkmark-done-outline' };
+    case 'cancelled':
+      return { title: 'Trip cancelled', pill: 'Closed', icon: 'close-circle-outline' };
+  }
+}
+
 const DRIVER_TRACK_H = 52;
 const DRIVER_THUMB_W = 50;
 
@@ -301,6 +333,8 @@ export default function DriverHomeScreen() {
   const [incomingRequests, setIncomingRequests] = useState(incomingRequestsSeed);
   const [requestModalVisible, setRequestModalVisible] = useState(false);
   const [currentTrip, setCurrentTrip] = useState<DriverTrip | null>(null);
+  const [currentTripExpanded, setCurrentTripExpanded] = useState(true);
+  const [tripUiTick, setTripUiTick] = useState(0);
   const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || 'Driver');
   const [profileLastName, setProfileLastName] = useState(user?.lastName?.trim() || '');
   const [profileEmail, setProfileEmail] = useState(user?.email ?? 'driver@ridr.app');
@@ -413,9 +447,26 @@ export default function DriverHomeScreen() {
     setEditingPhone(profilePhone);
   }, [profileEmail, profileFirstName, profileLastName, profilePhone, profileUsername]);
 
+  useEffect(() => {
+    if (!currentTrip || currentTrip.status === 'completed' || currentTrip.status === 'cancelled') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setTripUiTick((prev) => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [currentTrip]);
+
+  useEffect(() => {
+    if (currentTrip) {
+      setCurrentTripExpanded(true);
+    }
+  }, [currentTrip?.id, currentTrip?.status]);
+
   const name = profileFirstName || user?.staffCode || 'Driver';
   const progressIndex = currentTrip ? DRIVER_PROGRESS_STEPS.findIndex((step) => step.key === currentTrip.status) : -1;
-  const currentTripBadge = currentTrip ? getTripBadge(currentTrip.status) : null;
   const currentTripPrimaryAction = currentTrip ? getPrimaryAction(currentTrip.status) : null;
   const showHomeChrome = activeTab === 'home' && subScreen === null;
   const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
@@ -451,6 +502,7 @@ export default function DriverHomeScreen() {
     }
     hapticMedium();
     setRequestModalVisible(false);
+    setCurrentTripExpanded(true);
     setCurrentTrip({
       ...request,
       status: 'matched',
@@ -832,54 +884,125 @@ export default function DriverHomeScreen() {
 
       {currentTrip ? (
         <View style={[styles.sectionCard, { backgroundColor: ui.card, borderColor: ui.border }]}> 
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: ui.text }]}>Current trip</Text>
-            <View style={[styles.badge, { backgroundColor: currentTripBadge?.bg }]}> 
-              <Text style={[styles.badgeText, { color: currentTripBadge?.text }]}>{currentTripBadge?.label}</Text>
+          <Pressable
+            style={styles.currentTripArrivalBar}
+            onPress={() => {
+              hapticSelection();
+              setCurrentTripExpanded((prev) => !prev);
+            }}
+          >
+            <Ionicons name={getTripBarCopy(currentTrip, tripUiTick).icon} size={18} color="#ffffff" />
+            <Text style={styles.currentTripArrivalBarText} numberOfLines={1}>
+              {getTripBarCopy(currentTrip, tripUiTick).title}
+            </Text>
+            <View style={styles.currentTripArrivalPill}>
+              <Text style={styles.currentTripArrivalPillText}>{getTripBarCopy(currentTrip, tripUiTick).pill}</Text>
             </View>
-          </View>
-          <Text style={[styles.currentTripRoute, { color: ui.text }]}>{currentTrip.pickup} to {currentTrip.dropoff}</Text>
-          <Text style={[styles.currentTripMeta, { color: ui.textMuted }]}>Rider {currentTrip.riderName} • {currentTrip.distance} • {currentTrip.fare} • {currentTrip.paymentLabel}</Text>
-          <Text style={[styles.currentTripStatusSummary, { color: ui.textMuted }]}>{getStatusSummary(currentTrip.status, currentTrip.paymentLabel)}</Text>
-          <View style={styles.progressRow}>
-            {DRIVER_PROGRESS_STEPS.map((step, index) => {
-              const isActive = index <= progressIndex;
-              const isCurrent = currentTrip.status === step.key;
-              return (
-                <View key={step.key} style={styles.progressStep}>
-                  <View
-                    style={[
-                      styles.progressDot,
-                      {
-                        backgroundColor: isActive ? ui.accent : ui.soft,
-                        borderColor: isCurrent ? ui.text : 'transparent',
-                      },
-                    ]}
-                  />
-                  <Text style={[styles.progressLabel, { color: isActive ? ui.text : ui.textMuted }]}>{step.label}</Text>
+            <View style={styles.currentTripArrivalChevron}>
+              <Ionicons name={currentTripExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#000000" />
+            </View>
+          </Pressable>
+
+          {currentTripExpanded ? (
+            <View style={[styles.currentTripSurface, { backgroundColor: ui.soft, borderColor: ui.border }]}> 
+              <View style={styles.currentTripTopRow}>
+                <View style={styles.currentTripRiderMeta}>
+                  <Text style={[styles.currentTripRiderName, { color: ui.text }]}>{currentTrip.riderName}</Text>
+                  <Text style={[styles.currentTripMeta, { color: ui.textMuted }]}>{currentTrip.distance} • {currentTrip.fare} • {currentTrip.paymentLabel}</Text>
                 </View>
-              );
-            })}
-          </View>
-          <View style={styles.currentTripActions}>
-            {currentTripPrimaryAction ? (
-              <Pressable style={[styles.primaryButton, { backgroundColor: ui.accent }]} onPress={advanceTrip}>
-                <Ionicons name={currentTripPrimaryAction.icon} size={16} color="#171717" />
-                <Text style={styles.primaryButtonText}>{currentTripPrimaryAction.label}</Text>
-              </Pressable>
-            ) : (
-              <Pressable style={[styles.primaryButton, { backgroundColor: ui.accent }]} onPress={clearResolvedTrip}>
-                <Ionicons name="checkmark-done-outline" size={16} color="#171717" />
-                <Text style={styles.primaryButtonText}>Clear trip card</Text>
-              </Pressable>
-            )}
-            {currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled' ? (
-              <Pressable style={[styles.secondaryButton, { borderColor: ui.border, backgroundColor: ui.soft }]} onPress={cancelCurrentTrip}>
-                <Ionicons name="close-circle-outline" size={16} color={ui.text} />
-                <Text style={[styles.secondaryButtonText, { color: ui.text }]}>Cancel trip</Text>
-              </Pressable>
-            ) : null}
-          </View>
+                <View style={styles.currentTripContactActions}>
+                  <Pressable
+                    style={[styles.currentTripContactBtn, { backgroundColor: ui.card }]}
+                    onPress={() => {
+                      hapticLight();
+                      Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`);
+                    }}
+                  >
+                    <Ionicons name="call" size={18} color="#FFD000" />
+                  </Pressable>
+                  <Pressable
+                    style={[styles.currentTripContactBtn, { backgroundColor: ui.card }]}
+                    onPress={() => {
+                      hapticLight();
+                      Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`);
+                    }}
+                  >
+                    <Ionicons name="chatbubble-ellipses" size={17} color="#FFD000" />
+                  </Pressable>
+                </View>
+              </View>
+
+              <Text style={[styles.currentTripStatusSummary, { color: ui.textMuted }]}>{getStatusSummary(currentTrip.status, currentTrip.paymentLabel)}</Text>
+
+              <View style={styles.currentTripStageRow}>
+                {DRIVER_PROGRESS_STEPS.map((step, index) => {
+                  const isActive = index <= progressIndex;
+                  const isCurrent = currentTrip.status === step.key;
+                  return (
+                    <View
+                      key={step.key}
+                      style={[
+                        styles.currentTripStageChip,
+                        {
+                          backgroundColor: isCurrent ? '#171717' : isActive ? 'rgba(255,208,0,0.18)' : ui.card,
+                          borderColor: isCurrent ? '#171717' : ui.border,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.currentTripStageDot,
+                          { backgroundColor: isCurrent ? '#FFD000' : isActive ? '#facc15' : ui.border },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.currentTripStageText,
+                          { color: isCurrent ? '#ffffff' : isActive ? ui.text : ui.textMuted },
+                        ]}
+                      >
+                        {step.label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+
+              <View style={[styles.routePill, { backgroundColor: ui.card }]}> 
+                <View style={styles.routeLineContainer}>
+                  <View style={styles.routeDotsCol}>
+                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
+                    <View style={[styles.routeConnector, { backgroundColor: ui.border }]} />
+                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
+                  </View>
+                  <View style={styles.routeTextsCol}>
+                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{currentTrip.pickup}</Text>
+                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{currentTrip.dropoff}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.currentTripActions}>
+                {currentTripPrimaryAction ? (
+                  <Pressable style={[styles.primaryButton, styles.currentTripPrimaryButton, { backgroundColor: ui.accent }]} onPress={advanceTrip}>
+                    <Ionicons name={currentTripPrimaryAction.icon} size={16} color="#171717" />
+                    <Text style={styles.primaryButtonText}>{currentTripPrimaryAction.label}</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable style={[styles.primaryButton, styles.currentTripPrimaryButton, { backgroundColor: ui.accent }]} onPress={clearResolvedTrip}>
+                    <Ionicons name="checkmark-done-outline" size={16} color="#171717" />
+                    <Text style={styles.primaryButtonText}>Clear trip card</Text>
+                  </Pressable>
+                )}
+                {currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled' ? (
+                  <Pressable style={[styles.secondaryButton, styles.currentTripSecondaryButton, { borderColor: ui.border, backgroundColor: ui.card }]} onPress={cancelCurrentTrip}>
+                    <Ionicons name="close-circle-outline" size={16} color={ui.text} />
+                    <Text style={[styles.secondaryButtonText, { color: ui.text }]}>Cancel trip</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -1709,6 +1832,60 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 22,
   },
+  currentTripArrivalBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#171717',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  currentTripArrivalBarText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  currentTripArrivalPill: {
+    backgroundColor: '#2b2b2b',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  currentTripArrivalPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  currentTripArrivalChevron: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FFD000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currentTripSurface: {
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 14,
+    gap: 14,
+  },
+  currentTripTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  currentTripRiderMeta: {
+    flex: 1,
+    gap: 4,
+  },
+  currentTripRiderName: {
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
   currentTripMeta: {
     fontSize: 13,
     lineHeight: 18,
@@ -1716,6 +1893,40 @@ const styles = StyleSheet.create({
   currentTripStatusSummary: {
     fontSize: 13,
     lineHeight: 19,
+  },
+  currentTripContactActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  currentTripContactBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currentTripStageRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  currentTripStageChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  currentTripStageDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  currentTripStageText: {
+    fontSize: 12,
+    fontWeight: '800',
   },
   progressRow: {
     flexDirection: 'row',
@@ -1743,6 +1954,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     flexWrap: 'wrap',
+  },
+  currentTripPrimaryButton: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  currentTripSecondaryButton: {
+    minWidth: 132,
   },
   primaryButton: {
     minHeight: 44,
