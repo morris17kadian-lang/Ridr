@@ -1,12 +1,63 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
+import React, { useState } from 'react';
+import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
 import { greyCarAsset } from '../../../assets/images';
+import { hapticMedium, hapticWarning } from '../../../lib/haptics';
 import type { MainScreenUi } from '../mainScreenUi';
-import type { ActiveTripState } from './activeTripTypes';
+import type { ActiveTripState, TripCancelReason } from './activeTripTypes';
 
 const ACCENT = '#FFD000';
 const SIZE_PILL_BLUE = '#2563eb';
+const CANCEL_FEE_FREE = 0;
+const CANCEL_FEE_PARTIAL = 2.50;
+const CANCEL_FEE_FULL_FARE = -1; // -1 means full fare applies
+
+type CancelOption = {
+  reason: TripCancelReason;
+  label: string;
+  description: string;
+  /** Fee in USD. -1 = full fare charged. 0 = free. */
+  fee: number;
+};
+
+const CANCEL_OPTIONS: CancelOption[] = [
+  {
+    reason: 'change_of_plans',
+    label: 'Change of plans',
+    description: 'I no longer need this ride',
+    fee: CANCEL_FEE_PARTIAL,
+  },
+  {
+    reason: 'driver_too_far',
+    label: 'Driver is too far away',
+    description: "The ETA is longer than I expected",
+    fee: CANCEL_FEE_FREE,
+  },
+  {
+    reason: 'wrong_pickup',
+    label: 'Wrong pickup location',
+    description: 'I set the wrong pickup point',
+    fee: CANCEL_FEE_FREE,
+  },
+  {
+    reason: 'booked_by_mistake',
+    label: 'Booked by mistake',
+    description: 'I accidentally placed this booking',
+    fee: CANCEL_FEE_PARTIAL,
+  },
+  {
+    reason: 'other',
+    label: 'Other reason',
+    description: 'Another reason not listed above',
+    fee: CANCEL_FEE_FULL_FARE,
+  },
+];
+
+function feeLabel(fee: number, fareLabel?: string): string {
+  if (fee === 0) return 'No charge';
+  if (fee === CANCEL_FEE_FULL_FARE) return `Full fare charged (${fareLabel ?? 'see fare'})`;
+  return `$${fee.toFixed(2)} cancellation fee`;
+}
 
 const AVATAR_COLORS = ['#7c3aed', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899'];
 
@@ -38,6 +89,8 @@ type Props = {
   etaCountdownSec: number;
   headerPanHandlers?: GestureResponderHandlers;
   onToggleCollapse?: () => void;
+  /** Called after user picks a cancel reason and confirms. */
+  onCancelRide?: (reason: TripCancelReason, fee: number) => void;
 };
 
 export function RideDetailsBottomSheet({
@@ -47,7 +100,11 @@ export function RideDetailsBottomSheet({
   etaCountdownSec,
   headerPanHandlers,
   onToggleCollapse,
+  onCancelRide,
 }: Props) {
+  const [cancelModalVisible, setCancelModalVisible] = useState(false);
+  const [selectedReason, setSelectedReason] = useState<TripCancelReason | null>(null);
+
   const name = trip.driverName ?? 'Driver';
   const initials = getInitials(name);
   const avatarBg = avatarColor(name);
@@ -150,8 +207,122 @@ export function RideDetailsBottomSheet({
               </View>
             </View>
           </View>
+
+          {/* Cancel ride button */}
+          {onCancelRide ? (
+            <>
+              <View style={[styles.divider, { backgroundColor: ui.divider }]} />
+              <Pressable
+                style={styles.cancelRideBtn}
+                onPress={() => {
+                  hapticWarning();
+                  setSelectedReason(null);
+                  setCancelModalVisible(true);
+                }}
+              >
+                <Ionicons name="close-circle-outline" size={18} color="#ef4444" />
+                <Text style={styles.cancelRideBtnText}>Cancel Ride</Text>
+              </Pressable>
+            </>
+          ) : null}
         </View>
       </View>
+
+      {/* Cancel reason modal */}
+      <Modal
+        visible={cancelModalVisible}
+        animationType="slide"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setCancelModalVisible(false)}
+      >
+        <Pressable style={cancelStyles.overlay} onPress={() => setCancelModalVisible(false)}>
+          <Pressable style={[cancelStyles.sheet, { backgroundColor: ui.cardBg }]} onPress={() => {}}>
+            <View style={cancelStyles.handle} />
+            <Text style={[cancelStyles.title, { color: ui.text }]}>Cancel Ride</Text>
+            <Text style={[cancelStyles.subtitle, { color: ui.textMuted }]}>
+              Select a reason. A fee may apply.
+            </Text>
+
+            <ScrollView style={cancelStyles.optionList} showsVerticalScrollIndicator={false}>
+              {CANCEL_OPTIONS.map((opt) => {
+                const isSelected = selectedReason === opt.reason;
+                return (
+                  <Pressable
+                    key={opt.reason}
+                    style={[
+                      cancelStyles.optionRow,
+                      { borderColor: ui.divider, backgroundColor: isSelected ? (isDark ? '#1f1f23' : '#fffbea') : 'transparent' },
+                      isSelected && { borderColor: ACCENT },
+                    ]}
+                    onPress={() => {
+                      hapticMedium();
+                      setSelectedReason(opt.reason);
+                    }}
+                  >
+                    <View style={cancelStyles.optionLeft}>
+                      <Text style={[cancelStyles.optionLabel, { color: ui.text }]}>{opt.label}</Text>
+                      <Text style={[cancelStyles.optionDesc, { color: ui.textMuted }]}>{opt.description}</Text>
+                    </View>
+                    <View style={cancelStyles.optionRight}>
+                      <Text
+                        style={[
+                          cancelStyles.feeTag,
+                          { color: opt.fee === 0 ? '#22c55e' : '#ef4444' },
+                        ]}
+                      >
+                        {feeLabel(opt.fee, trip.fareLabel)}
+                      </Text>
+                      <View style={[cancelStyles.radioOuter, { borderColor: isSelected ? ACCENT : ui.divider }]}>
+                        {isSelected ? <View style={cancelStyles.radioInner} /> : null}
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Pressable
+              style={[
+                cancelStyles.confirmBtn,
+                { opacity: selectedReason ? 1 : 0.45 },
+              ]}
+              disabled={!selectedReason}
+              onPress={() => {
+                if (!selectedReason) return;
+                const opt = CANCEL_OPTIONS.find((o) => o.reason === selectedReason)!;
+                const feeText = opt.fee === 0
+                  ? 'You will not be charged.'
+                  : opt.fee === CANCEL_FEE_FULL_FARE
+                    ? `You will be charged the full fare (${trip.fareLabel ?? 'see fare'}).`
+                    : `You will be charged a $${opt.fee.toFixed(2)} cancellation fee.`;
+                hapticWarning();
+                Alert.alert(
+                  'Confirm Cancellation',
+                  `${feeText}\n\nAre you sure you want to cancel?`,
+                  [
+                    { text: 'Go back', style: 'cancel' },
+                    {
+                      text: 'Yes, cancel',
+                      style: 'destructive',
+                      onPress: () => {
+                        setCancelModalVisible(false);
+                        onCancelRide(selectedReason, opt.fee === CANCEL_FEE_FULL_FARE ? trip.fareUsd : opt.fee);
+                      },
+                    },
+                  ]
+                );
+              }}
+            >
+              <Text style={cancelStyles.confirmBtnText}>Confirm Cancellation</Text>
+            </Pressable>
+
+            <Pressable style={cancelStyles.dismissBtn} onPress={() => setCancelModalVisible(false)}>
+              <Text style={[cancelStyles.dismissBtnText, { color: ui.textMuted }]}>Keep my ride</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -403,5 +574,120 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     lineHeight: 18,
+  },
+  cancelRideBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  cancelRideBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ef4444',
+  },
+});
+
+const cancelStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#ccc',
+    marginBottom: 18,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    marginBottom: 16,
+  },
+  optionList: {
+    maxHeight: 340,
+  },
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginBottom: 10,
+    gap: 12,
+  },
+  optionLeft: {
+    flex: 1,
+    gap: 3,
+  },
+  optionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  optionDesc: {
+    fontSize: 12,
+    fontWeight: '400',
+  },
+  optionRight: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  feeTag: {
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#FFD000',
+  },
+  confirmBtn: {
+    marginTop: 16,
+    backgroundColor: '#ef4444',
+    borderRadius: 16,
+    paddingVertical: 15,
+    alignItems: 'center',
+  },
+  confirmBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  dismissBtn: {
+    marginTop: 12,
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  dismissBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

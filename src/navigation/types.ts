@@ -4,11 +4,23 @@ export type AuthStackParamList = {
   SignIn: undefined;
   SignUp: undefined;
   ForgotPassword: undefined;
-  ResetPassword: { email?: string } | undefined;
+  ResetPassword:
+    | {
+        email?: string;
+        identifier?: string;
+        resetToken?: string;
+        staffCode?: string;
+        isTemporaryPassword?: boolean;
+      }
+    | undefined;
 };
 
 export type MainStackParamList = {
   Home: undefined;
+};
+
+export type DriverStackParamList = {
+  DriverHome: undefined;
 };
 
 export type AuthEntryProps = NativeStackScreenProps<AuthStackParamList, 'SignIn' | 'SignUp'>;

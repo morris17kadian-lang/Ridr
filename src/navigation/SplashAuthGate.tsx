@@ -4,6 +4,7 @@ import { InteractionManager, View } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { useAppTheme } from '../theme/ThemeProvider';
 import { AuthStack } from './AuthStack';
+import { DriverStack } from './DriverStack';
 import { MainStack } from './MainStack';
 
 /**
@@ -15,7 +16,7 @@ import { MainStack } from './MainStack';
  * Splash is hidden after the auth tree has had a chance to mount.
  */
 export function SplashAuthGate() {
-  const { user, loading } = useAuth();
+  const { user, loading, appMode } = useAuth();
   const { colors } = useAppTheme();
   const hiddenRef = useRef(false);
   const isLoading = loading === true;
@@ -39,5 +40,7 @@ export function SplashAuthGate() {
     return <View style={{ flex: 1, backgroundColor: colors.surface }} />;
   }
 
-  return hasUser ? <MainStack /> : <AuthStack />;
+  if (!hasUser) return <AuthStack />;
+
+  return appMode === 'driver' ? <DriverStack /> : <MainStack />;
 }

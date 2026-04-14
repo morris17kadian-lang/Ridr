@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Image,
   Modal,
@@ -476,6 +477,37 @@ function SwipeToSend({
   );
 }
 
+function ConfirmCashRideButton({
+  ui,
+  disabled,
+  onConfirm,
+}: {
+  ui: MainScreenUi;
+  disabled?: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <Pressable
+      style={[
+        styles.cashConfirmButton,
+        {
+          backgroundColor: disabled ? '#c9b65a' : ACCENT,
+          borderColor: ui.divider,
+        },
+      ]}
+      onPress={onConfirm}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel="Confirm cash ride"
+    >
+      <Ionicons name="cash-outline" size={18} color="#171717" />
+      <Text style={styles.cashConfirmButtonText}>
+        {disabled ? 'Sending request…' : 'Confirm cash ride'}
+      </Text>
+    </Pressable>
+  );
+}
+
 export function FindingDriverModal({
   visible,
   phase,
@@ -654,6 +686,10 @@ export function FindingDriverModal({
                     onPress={() => {
                       hapticSelection();
                       onChangePayment('Cash');
+                      Alert.alert(
+                        'Cash payment selected',
+                        'You will pay for this trip at the end of the ride.'
+                      );
                     }}
                     style={[
                       styles.paymentChip,
@@ -685,6 +721,10 @@ export function FindingDriverModal({
                   <Text style={[styles.paymentHint, { color: ui.textMuted }]}>
                     Add a default card in Profile to pay with card.
                   </Text>
+                ) : paymentLabel === 'Cash' ? (
+                  <Text style={[styles.paymentHint, { color: ui.textMuted }]}> 
+                    Cash rides are paid at the end of the trip.
+                  </Text>
                 ) : null}
               </View>
 
@@ -697,9 +737,12 @@ export function FindingDriverModal({
                 onSelect={setSelectedDriverIndex}
               />
 
-              {/* Slide to pay — shown only once a driver is selected */}
-              {selectedDriverIndex >= 0 ? (
+              {/* Card uses the pay slider; cash uses a regular confirmation CTA. */}
+              {selectedDriverIndex >= 0 && paymentLabel === 'Card' ? (
                 <SwipeToSend ui={ui} isDark={isDark} disabled={confirming} onConfirm={() => void onSwipeConfirm()} fareFormatted={fareFormatted} />
+              ) : null}
+              {selectedDriverIndex >= 0 && paymentLabel === 'Cash' ? (
+                <ConfirmCashRideButton ui={ui} disabled={confirming} onConfirm={() => void onSwipeConfirm()} />
               ) : null}
             </>
           )}
@@ -985,6 +1028,23 @@ const styles = StyleSheet.create({
   paymentChipText: {
     fontSize: 13,
     fontWeight: '700',
+  },
+  cashConfirmButton: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    minHeight: TRACK_H,
+    borderRadius: 22,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 18,
+  },
+  cashConfirmButtonText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#171717',
   },
   driverHero: {
     alignItems: 'center',

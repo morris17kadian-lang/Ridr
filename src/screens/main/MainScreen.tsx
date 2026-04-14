@@ -90,6 +90,7 @@ import {
 } from '../../api';
 import {
   buildKingstonZoneFareEstimateBody,
+  cancelRideRequest,
   createImmediateRide,
   getRideRequestById,
   postFareEstimate,
@@ -551,7 +552,7 @@ function ProfileIcon({ size, color = '#171717' }: { size: number; color?: string
 // Tab icons use Ionicons (from @expo/vector-icons)
 
 export default function MainScreen() {
-  const { signOut, user } = useAuth();
+  const { signOut, user, setAppMode } = useAuth();
   const { colors, isDark, themeOverride, setThemeOverride } = useAppTheme();
   usePushToken();
   const [selectedRide, setSelectedRide] = useState('ride');
@@ -1751,7 +1752,12 @@ export default function MainScreen() {
         r.status !== 'cancelled'
     ) ?? null;
   const presentRide =
-    (activeTrip && activeTrip.expiresAtMs > nowMs ? activeTrip : null) ??
+    (activeTrip &&
+    activeTrip.expiresAtMs > nowMs &&
+    activeTrip.status !== 'completed' &&
+    activeTrip.status !== 'cancelled'
+      ? activeTrip
+      : null) ??
     latestBookedRide;
   const startFindingDriver = (forWhom: 'self' | 'friend') => {
     if (!hasRoute || routeIssue) {
@@ -2036,6 +2042,34 @@ export default function MainScreen() {
   const leaveActiveRideScreen = () => {
     setScreen('home');
   };
+  const handleCancelRide = useCallback(
+    (reason: import('./ride/activeTripTypes').TripCancelReason, fee: number) => {
+      const trip = activeTrip;
+      void (async () => {
+        if (trip?.serverRideRequestId) {
+          try {
+            await cancelRideRequest(trip.serverRideRequestId);
+          } catch {
+            // best-effort — proceed with local cancel regardless
+          }
+        }
+        const feeMsg = fee === 0
+          ? 'You have not been charged.'
+          : `A $${fee.toFixed(2)} cancellation fee has been applied.`;
+        if (trip) {
+          persistTripRecord({
+            ...trip,
+            status: 'cancelled',
+            cancelReason: reason,
+            cancelledAtMs: Date.now(),
+          });
+        }
+        setScreen('home');
+        Alert.alert('Ride cancelled', feeMsg);
+      })();
+    },
+    [activeTrip]
+  );
   const openBookedRideFromActivity = (ride: BookedRideRecord) => {
     if (ride.status === 'completed' || ride.status === 'cancelled') {
       hapticLight();
@@ -2764,6 +2798,7 @@ export default function MainScreen() {
     setSelectedLang,
     presentRide,
     leaveActiveRideScreen,
+    onCancelRide: handleCancelRide,
   });
   if (subScreen) return subScreen;
 
@@ -2982,15 +3017,29 @@ export default function MainScreen() {
               <Text style={[styles.userName, { color: ui.text }]}>{displayName}</Text>
             </View>
           </View>
-          <Pressable
-            style={[styles.supportButton, { backgroundColor: '#FFD000' }]}
-            onPress={() => {
-              hapticLight();
-              setScreen('notifications');
-            }}
-          >
-            <Ionicons name="notifications" size={18} color="#171717" />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              style={[styles.modeSwitchButton, { backgroundColor: ui.softBg, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.divider }]}
+              onPress={() => {
+                hapticLight();
+                void setAppMode('driver');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Switch to driver mode"
+            >
+              <Ionicons name="car-sport-outline" size={15} color={ui.text} />
+              <Text style={[styles.modeSwitchButtonText, { color: ui.text }]}>Drive</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.supportButton, { backgroundColor: '#FFD000' }]}
+              onPress={() => {
+                hapticLight();
+                setScreen('notifications');
+              }}
+            >
+              <Ionicons name="notifications" size={18} color="#171717" />
+            </Pressable>
+          </View>
         </View>
       </Animated.View>
       ) : null}
@@ -3091,23 +3140,31 @@ export default function MainScreen() {
               {bookAddressModal === 'home' ? homeAddress : workAddress}
             </Text>
             <View style={[styles.rideDetailDivider, { backgroundColor: ui.divider }]} />
-            <Pressable style={styles.rideDetailBookBtn} onPress={() => {
-              const addr = bookAddressModal === 'home' ? homeAddress : workAddress;
-              setDestinationQuery(addr);
-              setBookAddressModal(null);
-              setActiveTab('home');
-            }}>
-              <Text style={styles.rideDetailBookBtnText}>Go to this location</Text>
-            </Pressable>
-            <Pressable style={[styles.rideDetailBookBtn, { backgroundColor: isDark ? '#2b2b31' : '#171717', marginTop: 8 }]} onPress={() => {
-              const addr = bookAddressModal === 'home' ? homeAddress : workAddress;
-              setToQuery(addr);
-              setToUserEdited(true);
-              setBookAddressModal(null);
-              setActiveTab('home');
-            }}>
-              <Text style={[styles.rideDetailBookBtnText, { color: '#ffffff' }]}>Go from this location</Text>
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16, width: '100%' }}>
+              <Pressable
+                style={[styles.rideDetailBookBtn, { flex: 1, marginTop: 0 }]}
+                onPress={() => {
+                  const addr = bookAddressModal === 'home' ? homeAddress : workAddress;
+                  setDestinationQuery(addr);
+                  setBookAddressModal(null);
+                  setActiveTab('home');
+                }}
+              >
+                <Text style={styles.rideDetailBookBtnText}>Go to</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.rideDetailBookBtn, { flex: 1, marginTop: 0, backgroundColor: isDark ? '#2b2b31' : '#171717' }]}
+                onPress={() => {
+                  const addr = bookAddressModal === 'home' ? homeAddress : workAddress;
+                  setToQuery(addr);
+                  setToUserEdited(true);
+                  setBookAddressModal(null);
+                  setActiveTab('home');
+                }}
+              >
+                <Text style={[styles.rideDetailBookBtnText, { color: '#ffffff' }]}>Go from</Text>
+              </Pressable>
+            </View>
             <Pressable style={[styles.modalCancelBtn, { marginTop: 4, width: '100%' }]} onPress={() => {
               const type = bookAddressModal!;
               setBookAddressModal(null);
@@ -3161,25 +3218,31 @@ export default function MainScreen() {
                 <Text style={styles.rideDetailBookBtnText}>Book this route</Text>
               </Pressable>
             ) : (
-              <>
-                <Pressable style={styles.rideDetailBookBtn} onPress={() => {
-                  if (favBookModal?.type === 'place') setDestinationQuery(favBookModal.title);
-                  setFavBookModal(null);
-                  setActiveTab('home');
-                }}>
-                  <Text style={styles.rideDetailBookBtnText}>Go to this location</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16, width: '100%' }}>
+                <Pressable
+                  style={[styles.rideDetailBookBtn, { flex: 1, marginTop: 0 }]}
+                  onPress={() => {
+                    if (favBookModal?.type === 'place') setDestinationQuery(favBookModal.title);
+                    setFavBookModal(null);
+                    setActiveTab('home');
+                  }}
+                >
+                  <Text style={styles.rideDetailBookBtnText}>Go to</Text>
                 </Pressable>
-                <Pressable style={[styles.rideDetailBookBtn, { backgroundColor: isDark ? '#2b2b31' : '#171717', marginTop: 8 }]} onPress={() => {
-                  if (favBookModal?.type === 'place') {
-                    setToQuery(favBookModal.title);
-                    setToUserEdited(true);
-                  }
-                  setFavBookModal(null);
-                  setActiveTab('home');
-                }}>
-                  <Text style={[styles.rideDetailBookBtnText, { color: '#ffffff' }]}>Go from this location</Text>
+                <Pressable
+                  style={[styles.rideDetailBookBtn, { flex: 1, marginTop: 0, backgroundColor: isDark ? '#2b2b31' : '#171717' }]}
+                  onPress={() => {
+                    if (favBookModal?.type === 'place') {
+                      setToQuery(favBookModal.title);
+                      setToUserEdited(true);
+                    }
+                    setFavBookModal(null);
+                    setActiveTab('home');
+                  }}
+                >
+                  <Text style={[styles.rideDetailBookBtnText, { color: '#ffffff' }]}>Go from</Text>
                 </Pressable>
-              </>
+              </View>
             )}
           </Pressable>
         </Pressable>

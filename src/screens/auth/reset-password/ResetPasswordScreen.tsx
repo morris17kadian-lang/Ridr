@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { resetPasswordWithToken } from '../../../api/passwordReset';
 import type { ResetPasswordProps } from '../../../navigation/types';
 import { useAppTheme } from '../../../theme/ThemeProvider';
 import { useAuthStyles } from '../authStyles';
@@ -20,6 +21,10 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
   const { colors } = useAppTheme();
   const authStyles = useAuthStyles();
   const emailFromRoute = route.params?.email ?? '';
+  const identifierFromRoute = route.params?.identifier ?? emailFromRoute;
+  const resetToken = route.params?.resetToken ?? '';
+  const staffCode = route.params?.staffCode ?? '';
+  const isTemporaryPassword = route.params?.isTemporaryPassword === true;
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -35,11 +40,16 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
     }
     setSubmitting(true);
     try {
-      /* Wire to Firebase confirmPasswordReset when available */
-      await new Promise((r) => setTimeout(r, 400));
+      if (resetToken) {
+        await resetPasswordWithToken(resetToken, password);
+      } else {
+        await new Promise((r) => setTimeout(r, 400));
+      }
       Alert.alert('Password updated', 'You can sign in with your new password.', [
         { text: 'OK', onPress: () => navigation.navigate('SignIn') },
       ]);
+    } catch (e) {
+      Alert.alert('Reset password', e instanceof Error ? e.message : 'Could not update password.');
     } finally {
       setSubmitting(false);
     }
@@ -64,7 +74,12 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
         >
           <View style={authStyles.formCard}>
             <View style={authStyles.formCardSection}>
-              {emailFromRoute ? (
+              {isTemporaryPassword ? (
+                <Text style={authStyles.subtitle}>
+                  Your temporary driver password must be changed before you can continue.
+                  {staffCode ? ` Staff code: ${staffCode}.` : ''}
+                </Text>
+              ) : emailFromRoute ? (
                 <Text style={authStyles.subtitle}>Resetting password for {emailFromRoute}</Text>
               ) : (
                 <Text style={authStyles.subtitle}>
@@ -72,6 +87,24 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
                   it here (demo flow).
                 </Text>
               )}
+
+              {identifierFromRoute ? (
+                <>
+                  <Text style={authStyles.label}>{isTemporaryPassword ? 'Username' : 'Account'}</Text>
+                </>
+              ) : null}
+
+            </View>
+            {identifierFromRoute ? (
+              <TextInput
+                style={[authStyles.input, authStyles.inputCardBleed]}
+                value={identifierFromRoute}
+                editable={false}
+                placeholderTextColor={colors.textPlaceholder}
+              />
+            ) : null}
+
+            <View style={authStyles.formCardSection}>
 
               <Text style={authStyles.label}>New password</Text>
             </View>

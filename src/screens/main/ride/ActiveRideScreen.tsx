@@ -25,6 +25,7 @@ type Props = {
   ui: MainScreenUi;
   isDark: boolean;
   onEndTrip: () => void;
+  onCancelRide?: (reason: import('./activeTripTypes').TripCancelReason, fee: number) => void;
 };
 
 function nearestRouteIndex(
@@ -47,7 +48,7 @@ function nearestRouteIndex(
   return best;
 }
 
-export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
+export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: Props) {
   const mapRef = useRef<MapView | null>(null);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const maxTranslateRef = useRef(0);
@@ -287,6 +288,7 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip }: Props) {
           etaCountdownSec={etaCountdownSec}
           headerPanHandlers={panResponder.panHandlers}
           onToggleCollapse={onEndTrip}
+          onCancelRide={onCancelRide}
         />
       </Animated.View>
     </View>

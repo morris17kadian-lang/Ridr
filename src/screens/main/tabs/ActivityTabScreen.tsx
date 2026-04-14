@@ -206,11 +206,8 @@ export function ActivityTabScreen({
                     </Text>
                     <Ionicons name="chevron-forward" size={16} color={ui.textMuted} />
                   </View>
-                  <Text style={[styles.activityCardSub, { color: ui.textMuted }]}>
-                    {ride.driverName} · {ride.carDetails} · {ride.fareLabel ?? `$${ride.fareUsd.toFixed(2)}`}
-                  </Text>
-                  <Text style={[styles.activityCardSub, { color: ui.textMuted, marginTop: 2 }]}>
-                    {ride.status.replace('_', ' ')} · PIN {ride.driverPin} · ETA {ride.etaMinutes} min · {ride.bookedFor === 'friend' ? 'Friend' : 'You'}
+                  <Text style={[styles.activityCardSub, { color: ui.textMuted }]} numberOfLines={1}>
+                    {ride.fareLabel ?? `$${ride.fareUsd.toFixed(2)}`} · ETA {ride.etaMinutes} min
                   </Text>
                 </View>
               </Pressable>
@@ -240,11 +237,8 @@ export function ActivityTabScreen({
                 </Text>
                 <Ionicons name="chevron-forward" size={16} color="#92400e" />
               </View>
-              <Text style={[styles.activityCardSub, { color: '#78350f' }]}>
-                {presentRide.driverName} · {presentRide.carDetails} · {presentRide.fareLabel ?? `$${presentRide.fareUsd.toFixed(2)}`} · ETA {presentRide.etaMinutes} min
-              </Text>
-              <Text style={[styles.activityCardSub, { color: '#78350f', marginTop: 2 }]}>
-                PIN {presentRide.driverPin} · Expires in {presentRideMinutesLeft} min
+              <Text style={[styles.activityCardSub, { color: '#78350f' }]} numberOfLines={1}>
+                {presentRide.fareLabel ?? `$${presentRide.fareUsd.toFixed(2)}`} · Expires in {presentRideMinutesLeft} min
               </Text>
             </View>
           </Pressable>

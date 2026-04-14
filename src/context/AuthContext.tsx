@@ -4,15 +4,30 @@ import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 export const AUTH_SESSION_KEY = 'ridr_auth_session_v1';
+export const APP_MODE_KEY = 'ridr_app_mode_v1';
+const DEMO_ACCESS_TOKEN_PREFIX = 'ridr_demo_access_token';
 const REFRESH_MARGIN_MS = 60_000;
+
+export type AppMode = 'rider' | 'driver';
 
 export type AuthUser = {
   email: string;
   uid: string;
+  username?: string;
+  staffCode?: string;
   firstName?: string;
   lastName?: string;
   phone?: string;
 };
+
+export type SignInResult =
+  | { status: 'signed-in' }
+  | {
+      status: 'password-reset-required';
+      identifier: string;
+      resetToken?: string;
+      staffCode?: string;
+    };
 
 export type SignUpPayload = {
   email: string;
@@ -25,7 +40,10 @@ export type SignUpPayload = {
 type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  appMode: AppMode;
+  setAppMode: (mode: AppMode) => Promise<void>;
+  signIn: (identifier: string, password: string) => Promise<SignInResult>;
+  signInSampleRider: () => Promise<void>;
   signUp: (payload: SignUpPayload) => Promise<void>;
   signOut: () => Promise<void>;
   /** Called after forgot-password flow — local session only for UI demo */
@@ -37,6 +55,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [appMode, setAppModeState] = useState<AppMode>('rider');
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
 
@@ -75,18 +94,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user: {
       id: string;
       email: string;
+      username?: string;
+      staffCode?: string;
       firstName?: string;
       lastName?: string;
       phone?: string;
     };
     accessToken: string;
     refreshToken: string;
+    mustResetPassword?: boolean;
+    passwordResetToken?: string;
   };
 
   const toAuthUser = useCallback((apiUser: ApiAuthResponse['user']): AuthUser => {
     return {
       uid: apiUser.id,
       email: apiUser.email.trim().toLowerCase(),
+      ...(typeof apiUser.username === 'string' ? { username: apiUser.username } : {}),
+      ...(typeof apiUser.staffCode === 'string' ? { staffCode: apiUser.staffCode } : {}),
       ...(typeof apiUser.firstName === 'string' ? { firstName: apiUser.firstName } : {}),
       ...(typeof apiUser.lastName === 'string' ? { lastName: apiUser.lastName } : {}),
       ...(typeof apiUser.phone === 'string' ? { phone: apiUser.phone } : {}),
@@ -131,6 +156,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setAccessToken(null);
     setRefreshToken(null);
+  }, []);
+
+  const setAppMode = useCallback(async (mode: AppMode) => {
+    setAppModeState(mode);
+    await AsyncStorage.setItem(APP_MODE_KEY, mode);
   }, []);
 
   const requestJson = useCallback(
@@ -184,10 +214,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [baseUrl]
   );
 
+  const signInSampleRider = useCallback(async () => {
+    const demoSession: AuthSession = {
+      user: {
+        uid: 'sample-rider-001',
+        email: 'sample.rider@ridr.app',
+        username: 'sample.rider',
+        firstName: 'Sample',
+        lastName: 'Rider',
+        phone: '+18765550199',
+      },
+      accessToken: `${DEMO_ACCESS_TOKEN_PREFIX}:${Date.now()}`,
+      refreshToken: 'ridr_demo_refresh_token',
+    };
+    await persistSession(demoSession);
+  }, [persistSession]);
+
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
+        const [raw, savedMode] = await Promise.all([
+          AsyncStorage.getItem(AUTH_SESSION_KEY),
+          AsyncStorage.getItem(APP_MODE_KEY),
+        ]);
+        if (savedMode === 'rider' || savedMode === 'driver') {
+          setAppModeState(savedMode);
+        }
         if (raw) {
           try {
             const parsed = JSON.parse(raw) as Partial<AuthSession> | null;
@@ -204,12 +256,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               const restoredUser: AuthUser = {
                 email: parsed.user.email,
                 uid: parsed.user.uid,
+                ...(typeof parsed.user.username === 'string' ? { username: parsed.user.username } : {}),
+                ...(typeof parsed.user.staffCode === 'string' ? { staffCode: parsed.user.staffCode } : {}),
                 ...(typeof parsed.user.firstName === 'string' ? { firstName: parsed.user.firstName } : {}),
                 ...(typeof parsed.user.lastName === 'string' ? { lastName: parsed.user.lastName } : {}),
                 ...(typeof parsed.user.phone === 'string' ? { phone: parsed.user.phone } : {}),
               };
 
-              if (!isTokenExpiredOrNearExpiry(parsed.accessToken)) {
+              if (
+                parsed.accessToken.startsWith(DEMO_ACCESS_TOKEN_PREFIX) ||
+                !isTokenExpiredOrNearExpiry(parsed.accessToken)
+              ) {
                 await persistSession({
                   user: restoredUser,
                   accessToken: parsed.accessToken,
@@ -238,21 +295,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [isTokenExpiredOrNearExpiry, persistSession, requestJson]);
 
   const signIn = useCallback(
-    async (email: string, password: string) => {
-      const trimmed = email.trim().toLowerCase();
-      if (!trimmed) throw new Error('Email required');
+    async (identifier: string, password: string): Promise<SignInResult> => {
+      const trimmed = identifier.trim();
+      if (!trimmed) throw new Error('Email or staff code required');
       if (!password) throw new Error('Password required');
 
+      const normalized = trimmed.toLowerCase();
+      const isEmail = normalized.includes('@');
+      const username = trimmed.toUpperCase();
+
       const data = await requestJson<ApiAuthResponse>('/auth/login', {
-        email: trimmed,
+        ...(isEmail ? { email: normalized } : { username, staffCode: username }),
+        identifier: isEmail ? normalized : username,
         password,
       });
+
+      if (data.mustResetPassword) {
+        return {
+          status: 'password-reset-required',
+          identifier: data.user.staffCode ?? data.user.username ?? (isEmail ? normalized : username),
+          ...(typeof data.passwordResetToken === 'string' && data.passwordResetToken
+            ? { resetToken: data.passwordResetToken }
+            : {}),
+          ...(typeof data.user.staffCode === 'string' ? { staffCode: data.user.staffCode } : {}),
+        };
+      }
 
       await persistSession({
         user: toAuthUser(data.user),
         accessToken: data.accessToken,
         refreshToken: data.refreshToken,
       });
+
+      return { status: 'signed-in' };
     },
     [persistSession, requestJson, toAuthUser]
   );
@@ -294,12 +369,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       loading,
+      appMode,
+      setAppMode,
       signIn,
+      signInSampleRider,
       signUp,
       signOut,
       markPasswordResetSent,
     }),
-    [user, loading, signIn, signUp, signOut, markPasswordResetSent]
+    [user, loading, appMode, setAppMode, signIn, signInSampleRider, signUp, signOut, markPasswordResetSent]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

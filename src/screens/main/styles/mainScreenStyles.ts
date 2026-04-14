@@ -121,6 +121,23 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modeSwitchButton: {
+    minHeight: 32,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  modeSwitchButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
   heroCard: {
     backgroundColor: '#171717',
     borderRadius: 30,

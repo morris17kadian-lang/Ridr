@@ -250,7 +250,7 @@ export function MainSubScreenRouter(p: MainSubScreenRouterProps): React.ReactEle
 
   if (screen === 'activeRide' && presentRide) {
     return (
-      <ActiveRideScreen trip={presentRide} ui={p.ui} isDark={p.isDark} onEndTrip={p.leaveActiveRideScreen} />
+      <ActiveRideScreen trip={presentRide} ui={p.ui} isDark={p.isDark} onEndTrip={p.leaveActiveRideScreen} onCancelRide={p.onCancelRide} />
     );
   }
 

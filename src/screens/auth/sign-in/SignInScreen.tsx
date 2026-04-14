@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { isValidPhoneNumber, parsePhoneNumberFromString } from 'libphonenumber-js';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../../context/AuthContext';
+import type { AppMode } from '../../../context/AuthContext';
 import type { AuthEntryProps } from '../../../navigation/types';
 import { useAppTheme } from '../../../theme/ThemeProvider';
 import { useAuthStyles } from '../authStyles';
@@ -27,14 +28,14 @@ import { AuthTextField } from '../components/AuthTextField';
 type AuthMode = 'login' | 'signup';
 
 export default function SignInScreen({ navigation, route }: AuthEntryProps) {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signInSampleRider, signUp, setAppMode } = useAuth();
   const { colors } = useAppTheme();
   const authStyles = useAuthStyles();
   const [mode, setMode] = useState<AuthMode>(route.name === 'SignUp' ? 'signup' : 'login');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
-  const [loginEmail, setLoginEmail] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -113,15 +114,27 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
     Alert.alert(title, friendly);
   };
 
-  const onSubmit = async () => {
+  const isDriverStaffCode = (value: string) => /^R\d+$/i.test(value.trim());
+
+  const onSubmit = async (targetMode: AppMode = 'rider') => {
     if (mode === 'login') {
-      if (!loginEmail.trim() || !password) {
-        showAuthError('Sign in', 'Enter your email and password.');
+      if (!loginIdentifier.trim() || !password) {
+        showAuthError('Sign in', 'Enter your email or staff code and password.');
         return;
       }
       setSubmitting(true);
       try {
-        await signIn(loginEmail.trim(), password);
+        const nextMode: AppMode = isDriverStaffCode(loginIdentifier) ? 'driver' : targetMode;
+        await setAppMode(nextMode);
+        const result = await signIn(loginIdentifier.trim(), password);
+        if (result.status === 'password-reset-required') {
+          navigation.replace('ResetPassword', {
+            identifier: result.identifier,
+            resetToken: result.resetToken,
+            staffCode: result.staffCode,
+            isTemporaryPassword: true,
+          });
+        }
       } catch (e) {
         showAuthError('Sign in', e instanceof Error ? e.message : 'Something went wrong.');
       } finally {
@@ -157,6 +170,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
 
     setSubmitting(true);
     try {
+      await setAppMode('rider');
       await signUp({
         email: email.trim(),
         password,
@@ -245,16 +259,16 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
 
             {mode === 'login' ? (
               <AuthTextField
-                label="Email address"
+                label="Email or staff code"
                 icon="mail-outline"
-                value={loginEmail}
-                onChangeText={setLoginEmail}
-                placeholder="you@example.com"
-                autoCapitalize="none"
+                value={loginIdentifier}
+                onChangeText={setLoginIdentifier}
+                placeholder="you@example.com or R001"
+                autoCapitalize="characters"
                 autoCorrect={false}
-                keyboardType="email-address"
-                autoComplete="email"
-                textContentType="emailAddress"
+                keyboardType="default"
+                autoComplete="username"
+                textContentType="username"
               />
             ) : (
               <AuthTextField
@@ -308,7 +322,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
             <View style={authStyles.formCardSection}>
               <Pressable
                 style={authStyles.primaryBtn}
-                onPress={() => void onSubmit()}
+                onPress={() => void onSubmit('rider')}
                 disabled={submitting}
               >
                 {submitting ? (
@@ -317,25 +331,67 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
                   <Text style={authStyles.primaryBtnText}>{mode === 'login' ? 'Sign in' : 'Sign up'}</Text>
                 )}
               </Pressable>
+
+              {mode === 'login' ? (
+                <>
+                  <Pressable
+                    style={authStyles.demoBtn}
+                    onPress={() => {
+                      setSubmitting(true);
+                      void (async () => {
+                        try {
+                          await setAppMode('rider');
+                          await signInSampleRider();
+                        } catch (e) {
+                          showAuthError('Sample rider login', e instanceof Error ? e.message : 'Something went wrong.');
+                        } finally {
+                          setSubmitting(false);
+                        }
+                      })();
+                    }}
+                    disabled={submitting}
+                    accessibilityRole="button"
+                    accessibilityLabel="Use sample rider login"
+                  >
+                    <Ionicons name="person-circle-outline" size={18} color={colors.text} />
+                    <Text style={authStyles.demoBtnText}>Use Sample Rider Login</Text>
+                  </Pressable>
+                  <Text style={authStyles.demoBtnHint}>
+                    Opens a local rider demo account without needing backend credentials.
+                  </Text>
+                </>
+              ) : null}
+
+              {mode === 'signup' ? (
+                <View style={authStyles.footerNote}>
+                  <Pressable
+                    onPress={() => setMode('login')}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Already have an account? Sign in"
+                  >
+                    <Text style={authStyles.footerText}>
+                      Already have an account? <Text style={authStyles.footerLink}>Sign in</Text>
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
 
-            <View style={authStyles.formCardSection}>
-              <Text style={authStyles.socialDivider}>or continue with</Text>
+            {mode === 'login' ? (
+              <View style={authStyles.formCardSection}>
+                <View style={authStyles.socialDividerRow}>
+                  <View style={authStyles.socialDividerLine} />
+                  <Text style={authStyles.socialDivider}>or continue with</Text>
+                  <View style={authStyles.socialDividerLine} />
+                </View>
 
-              <View style={authStyles.socialIconsRow}>
-                <Pressable style={authStyles.socialIconBtn} disabled>
+                <Pressable style={[authStyles.socialBtn, authStyles.socialBtnDisabled]} disabled>
                   <Ionicons name="logo-google" size={20} color={colors.textPlaceholder} />
-                </Pressable>
-                {Platform.OS === 'ios' ? (
-                  <Pressable style={authStyles.socialIconBtn} disabled>
-                    <Ionicons name="logo-apple" size={22} color={colors.textPlaceholder} />
-                  </Pressable>
-                ) : null}
-                <Pressable style={authStyles.socialIconBtn} disabled>
-                  <Ionicons name="mail-outline" size={20} color={colors.textPlaceholder} />
+                  <Text style={authStyles.socialBtnTextDisabled}>Sign in with Gmail</Text>
                 </Pressable>
               </View>
-            </View>
+            ) : null}
           </View>
           </Animated.View>
         </ScrollView>

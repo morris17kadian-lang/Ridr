@@ -102,4 +102,5 @@ export type MainSubScreenRouterProps = {
   setSelectedLang: (v: string) => void;
   presentRide: ActiveTripState | null;
   leaveActiveRideScreen: () => void;
+  onCancelRide?: (reason: import('../ride/activeTripTypes').TripCancelReason, fee: number) => void;
 };
