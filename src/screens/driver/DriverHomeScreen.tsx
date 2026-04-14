@@ -883,7 +883,7 @@ export default function DriverHomeScreen() {
       </View>
 
       {currentTrip ? (
-        <View style={[styles.sectionCard, { backgroundColor: ui.card, borderColor: ui.border }]}> 
+        <View style={styles.currentTripWrap}>
           <Pressable
             style={styles.currentTripArrivalBar}
             onPress={() => {
@@ -1798,11 +1798,8 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '600',
   },
-  sectionCard: {
-    borderRadius: 24,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 16,
-    gap: 14,
+  currentTripWrap: {
+    gap: 12,
   },
   sectionHeader: {
     flexDirection: 'row',
