@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  Dimensions,
   Modal,
   PanResponder,
   Platform,
@@ -239,6 +240,10 @@ function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: 
 
 const DRIVER_TRACK_H = 52;
 const DRIVER_THUMB_W = 50;
+const DRIVER_MAP_HEIGHT = 410;
+const DRIVER_SHEET_TOP = 250;
+const DRIVER_SHEET_PEEK = 148;
+const DRIVER_SHEET_MINIMIZED_OFFSET = Math.max(0, Dimensions.get('window').height - DRIVER_SHEET_TOP - DRIVER_SHEET_PEEK);
 
 type SwipeToActionProps = {
   onAccept: () => void;
@@ -349,6 +354,12 @@ export default function DriverHomeScreen() {
   const [tripPinError, setTripPinError] = useState('');
   const requestModalPulse = useRef(new Animated.Value(1)).current;
   const requestSoundRef = useRef<Audio.Sound | null>(null);
+  const driverSheetPan = useRef(new Animated.Value(0)).current;
+  const driverSheetOffset = useRef(new Animated.Value(0)).current;
+  const [driverSheetMinimized, setDriverSheetMinimized] = useState(false);
+  const driverSheetMinimizedRef = useRef(false);
+  const driverSheetEnabledRef = useRef(false);
+  const driverScrollOffsetRef = useRef(0);
   const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || 'Driver');
   const [profileLastName, setProfileLastName] = useState(user?.lastName?.trim() || '');
   const [profileEmail, setProfileEmail] = useState(user?.email ?? 'driver@ridr.app');
@@ -492,6 +503,7 @@ export default function DriverHomeScreen() {
   const currentTripPrimaryAction = currentTrip ? getPrimaryAction(currentTrip.status) : null;
   const showHomeChrome = activeTab === 'home' && subScreen === null;
   const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
+  const hasCurrentTrip = currentTrip != null;
   const profileDirty =
     editingFirstName.trim() !== profileFirstName.trim() ||
     editingLastName.trim() !== profileLastName.trim() ||
@@ -504,8 +516,91 @@ export default function DriverHomeScreen() {
   const mapDropoff = currentTrip?.dropoffCoordinate ?? incomingRequests[0]?.dropoffCoordinate ?? KSA_MAP_CENTER;
   const driverMarker = currentTrip?.pickupCoordinate ?? { latitude: KSA_MAP_CENTER.latitude + 0.008, longitude: KSA_MAP_CENTER.longitude - 0.006 };
 
+  const minimizeDriverSheet = () => {
+    driverSheetPan.setValue(0);
+    driverSheetMinimizedRef.current = true;
+    setDriverSheetMinimized(true);
+    Animated.spring(driverSheetOffset, {
+      toValue: DRIVER_SHEET_MINIMIZED_OFFSET,
+      useNativeDriver: false,
+      friction: 9,
+      tension: 70,
+    }).start();
+  };
+
+  const expandDriverSheet = () => {
+    driverSheetMinimizedRef.current = false;
+    setDriverSheetMinimized(false);
+    Animated.parallel([
+      Animated.spring(driverSheetPan, {
+        toValue: 0,
+        useNativeDriver: false,
+        friction: 9,
+        tension: 70,
+      }),
+      Animated.spring(driverSheetOffset, {
+        toValue: 0,
+        useNativeDriver: false,
+        friction: 9,
+        tension: 70,
+      }),
+    ]).start();
+  };
+
+  const driverSheetPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gs) => {
+        if (!driverSheetEnabledRef.current) return false;
+        if (driverSheetMinimizedRef.current) {
+          return gs.dy < -8 && Math.abs(gs.dy) > Math.abs(gs.dx);
+        }
+        return driverScrollOffsetRef.current <= 0 && gs.dy > 8 && Math.abs(gs.dy) > Math.abs(gs.dx);
+      },
+      onMoveShouldSetPanResponderCapture: () => false,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, gs) => {
+        if (driverSheetMinimizedRef.current) {
+          if (gs.dy < 0) {
+            driverSheetPan.setValue(Math.max(gs.dy, -DRIVER_SHEET_MINIMIZED_OFFSET));
+          }
+          return;
+        }
+        if (gs.dy > 0) {
+          driverSheetPan.setValue(gs.dy);
+        }
+      },
+      onPanResponderRelease: (_, gs) => {
+        if (driverSheetMinimizedRef.current) {
+          if (gs.dy < -40 || gs.vy < -0.35) {
+            expandDriverSheet();
+          } else {
+            Animated.spring(driverSheetPan, {
+              toValue: 0,
+              useNativeDriver: false,
+              friction: 9,
+              tension: 70,
+            }).start();
+          }
+          return;
+        }
+
+        if (gs.dy > 120 || gs.vy > 0.5) {
+          minimizeDriverSheet();
+        } else {
+          Animated.spring(driverSheetPan, {
+            toValue: 0,
+            useNativeDriver: false,
+            friction: 9,
+            tension: 70,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
   useEffect(() => {
-    if (!showHomeChrome || !isOnline || isBusy || incomingRequests.length === 0) {
+    if (!showHomeChrome || !isOnline || hasCurrentTrip || incomingRequests.length === 0) {
       setRequestModalVisible(false);
       return;
     }
@@ -515,7 +610,20 @@ export default function DriverHomeScreen() {
     }, 600);
 
     return () => clearTimeout(timeout);
-  }, [incomingRequests.length, isBusy, isOnline, showHomeChrome]);
+  }, [hasCurrentTrip, incomingRequests.length, isOnline, showHomeChrome]);
+
+  useEffect(() => {
+    driverSheetEnabledRef.current = showHomeChrome;
+  }, [showHomeChrome]);
+
+  useEffect(() => {
+    if (showHomeChrome) return;
+    driverSheetMinimizedRef.current = false;
+    setDriverSheetMinimized(false);
+    driverScrollOffsetRef.current = 0;
+    driverSheetPan.setValue(0);
+    driverSheetOffset.setValue(0);
+  }, [driverSheetOffset, driverSheetPan, showHomeChrome]);
 
   useEffect(() => {
     if (!requestModalVisible || !showHomeChrome || incomingRequests.length === 0) {
@@ -1286,17 +1394,34 @@ export default function DriverHomeScreen() {
 
       {!subScreen ? (
       <SafeAreaView style={styles.overlaySafeArea} pointerEvents="box-none">
-        <View style={[styles.sheet, styles.sheetBase, showHomeChrome ? styles.sheetHome : styles.sheetFlat, { backgroundColor: ui.panelBg }]}> 
+        <Animated.View
+          style={[
+            styles.sheet,
+            styles.sheetBase,
+            showHomeChrome ? styles.sheetHome : styles.sheetFlat,
+            {
+              backgroundColor: ui.panelBg,
+              transform: [{ translateY: Animated.add(driverSheetPan, driverSheetOffset) }],
+            },
+          ]}
+          {...driverSheetPanResponder.panHandlers}
+        > 
+          {showHomeChrome ? <View style={[styles.sheetDragHandle, { backgroundColor: ui.border }]} /> : null}
           {activeTab === 'settings' ? renderSettingsTab() : (
             <ScrollView
               contentContainerStyle={[styles.content, showHomeChrome ? styles.contentHome : styles.contentFlat]}
               showsVerticalScrollIndicator={false}
+              scrollEnabled={!driverSheetMinimized}
+              onScroll={(event) => {
+                driverScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+              }}
+              scrollEventThrottle={16}
             >
               {activeTab === 'home' ? renderHomeTab() : null}
               {activeTab === 'trips' ? renderTripsTab() : null}
             </ScrollView>
           )}
-        </View>
+        </Animated.View>
       </SafeAreaView>
       ) : null}
 
@@ -1336,7 +1461,7 @@ export default function DriverHomeScreen() {
       {/* ── Incoming request modal ── */}
       {(() => {
         const request = incomingRequests[0];
-        if (!request || !isOnline || isBusy || !showHomeChrome || !requestModalVisible) return null;
+        if (!request || !isOnline || hasCurrentTrip || !showHomeChrome || !requestModalVisible) return null;
         
         return (
           <Modal
@@ -2006,6 +2131,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     overflow: 'hidden',
+  },
+  sheetDragHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginTop: 10,
+    marginBottom: -2,
   },
   sheetHome: {
     marginTop: 250,
