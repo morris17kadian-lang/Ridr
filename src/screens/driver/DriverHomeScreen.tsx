@@ -877,54 +877,13 @@ export default function DriverHomeScreen() {
           <Text style={[styles.emptySub, { color: ui.textMuted }]}>New rider requests will appear here.</Text>
         </View>
       ) : (
-        <>
-          {incomingRequests.map((request) => (
-            <View key={request.id} style={[styles.requestCard, { backgroundColor: ui.card, borderColor: ui.border }]}>
-              {/* Top row: name + fare */}
-              <View style={styles.requestTopRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.requestName, { color: ui.text }]}>{request.riderName}</Text>
-                  <Text style={[styles.requestMeta, { color: ui.textMuted }]}>{request.eta} · {request.distance}</Text>
-                </View>
-                <View style={styles.requestFareBlock}>
-                  <Text style={[styles.requestFare, { color: '#16a34a' }]}>{request.fare}</Text>
-                  <LinearGradient
-                    colors={request.paymentLabel === 'Cash' ? ['#16a34a', '#15803d'] : ['#2563eb', '#1d4ed8']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={[styles.inlineBadge, { alignSelf: 'flex-end' }]}
-                  >
-                    <Text style={styles.inlineBadgeTextBold}>{request.paymentLabel}</Text>
-                  </LinearGradient>
-                </View>
-              </View>
-
-              {/* Route pill with connecting line */}
-              <View style={[styles.routePill, { backgroundColor: ui.soft }]}>
-                <View style={styles.routeLineContainer}>
-                  <View style={styles.routeDotsCol}>
-                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
-                    <View style={[styles.routeConnector, { backgroundColor: ui.border }]} />
-                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
-                  </View>
-                  <View style={styles.routeTextsCol}>
-                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.pickup}</Text>
-                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.dropoff}</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Swipe to accept / decline */}
-              <SwipeToAction
-                onAccept={() => handleAccept(request.id)}
-                onDecline={() => handleDecline(request.id)}
-                disabled={!isOnline || !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled')}
-                isDark={isDark}
-                borderColor={ui.border}
-              />
-            </View>
-          ))}
-        </>
+        <View style={[styles.emptyState, { backgroundColor: ui.soft }]}>
+          <Ionicons name="radio" size={22} color={ui.tabActive} />
+          <Text style={[styles.emptyTitle, { color: ui.text }]}>
+            {activeRequestCount} incoming {activeRequestCount === 1 ? 'request' : 'requests'}
+          </Text>
+          <Text style={[styles.emptySub, { color: ui.textMuted }]}>Requests pop up automatically.</Text>
+        </View>
       )}
     </>
   );
@@ -1109,6 +1068,74 @@ export default function DriverHomeScreen() {
         </Pressable>
       </BlurView>
       ) : null}
+
+      {/* ── Incoming request modal ── */}
+      {(() => {
+        const request = incomingRequests[0];
+        if (!request || !isOnline) return null;
+        const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
+        return (
+          <Modal
+            visible
+            animationType="slide"
+            transparent
+            statusBarTranslucent
+            onRequestClose={() => handleDecline(request.id)}
+          >
+            <View style={styles.modalOverlay} />
+            <View style={[styles.requestModalSheet, { backgroundColor: ui.panelBg }]}>
+              <View style={styles.modalHandle} />
+              {incomingRequests.length > 1 && (
+                <View style={styles.requestModalQueueBadge}>
+                  <Text style={[styles.requestModalQueueText, { color: ui.textMuted }]}>
+                    +{incomingRequests.length - 1} more waiting
+                  </Text>
+                </View>
+              )}
+              {/* Top row: name + fare */}
+              <View style={styles.requestTopRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.requestName, { color: ui.text }]}>{request.riderName}</Text>
+                  <Text style={[styles.requestMeta, { color: ui.textMuted }]}>{request.eta} · {request.distance}</Text>
+                </View>
+                <View style={styles.requestFareBlock}>
+                  <Text style={[styles.requestFare, { color: '#16a34a' }]}>{request.fare}</Text>
+                  <LinearGradient
+                    colors={request.paymentLabel === 'Cash' ? ['#16a34a', '#15803d'] : ['#2563eb', '#1d4ed8']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={[styles.inlineBadge, { alignSelf: 'flex-end' }]}
+                  >
+                    <Text style={styles.inlineBadgeTextBold}>{request.paymentLabel}</Text>
+                  </LinearGradient>
+                </View>
+              </View>
+              {/* Route pill */}
+              <View style={[styles.routePill, { backgroundColor: ui.soft }]}>
+                <View style={styles.routeLineContainer}>
+                  <View style={styles.routeDotsCol}>
+                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
+                    <View style={[styles.routeConnector, { backgroundColor: ui.border }]} />
+                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
+                  </View>
+                  <View style={styles.routeTextsCol}>
+                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.pickup}</Text>
+                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.dropoff}</Text>
+                  </View>
+                </View>
+              </View>
+              {/* Swipe to accept / decline */}
+              <SwipeToAction
+                onAccept={() => handleAccept(request.id)}
+                onDecline={() => handleDecline(request.id)}
+                disabled={isBusy}
+                isDark={isDark}
+                borderColor={ui.border}
+              />
+            </View>
+          </Modal>
+        );
+      })()}
 
       {/* ── Earnings detail modal ── */}
       <Modal visible={earningsModal === 'earnings'} animationType="slide" transparent onRequestClose={() => setEarningsModal(null)}>
@@ -1342,6 +1369,28 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(120,120,128,0.35)',
     alignSelf: 'center',
     marginBottom: 6,
+  },
+  requestModalSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 20,
+    paddingBottom: 44,
+    gap: 14,
+  },
+  requestModalQueueBadge: {
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 99,
+    backgroundColor: 'rgba(120,120,128,0.12)',
+  },
+  requestModalQueueText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   modalTitle: {
     fontSize: 20,
