@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Modal,
   PanResponder,
   Platform,
@@ -18,6 +20,7 @@ import {
 } from 'react-native';
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { clearAppCache } from '../../lib/appCacheStorage';
+import { incomingRequestChimeUri } from '../../lib/incomingRequestChime';
 import { useAuth } from '../../context/AuthContext';
 import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useAppTheme, type ThemeOverride } from '../../theme/ThemeProvider';
@@ -344,6 +347,8 @@ export default function DriverHomeScreen() {
   const [tripPinModalVisible, setTripPinModalVisible] = useState(false);
   const [tripPinInput, setTripPinInput] = useState('');
   const [tripPinError, setTripPinError] = useState('');
+  const requestModalPulse = useRef(new Animated.Value(1)).current;
+  const requestSoundRef = useRef<Audio.Sound | null>(null);
   const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || 'Driver');
   const [profileLastName, setProfileLastName] = useState(user?.lastName?.trim() || '');
   const [profileEmail, setProfileEmail] = useState(user?.email ?? 'driver@ridr.app');
@@ -511,6 +516,94 @@ export default function DriverHomeScreen() {
 
     return () => clearTimeout(timeout);
   }, [incomingRequests.length, isBusy, isOnline, showHomeChrome]);
+
+  useEffect(() => {
+    if (!requestModalVisible || !showHomeChrome || incomingRequests.length === 0) {
+      requestModalPulse.stopAnimation();
+      requestModalPulse.setValue(1);
+      return;
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(requestModalPulse, { toValue: 1.02, duration: 1100, useNativeDriver: true }),
+        Animated.timing(requestModalPulse, { toValue: 1, duration: 1100, useNativeDriver: true }),
+      ])
+    );
+
+    loop.start();
+
+    return () => {
+      loop.stop();
+      requestModalPulse.setValue(1);
+    };
+  }, [incomingRequests.length, requestModalPulse, requestModalVisible, showHomeChrome]);
+
+  useEffect(() => {
+    if (!requestModalVisible || !showHomeChrome || incomingRequests.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const playIncomingSound = async () => {
+      try {
+        if (requestSoundRef.current) {
+          await requestSoundRef.current.stopAsync();
+          await requestSoundRef.current.unloadAsync();
+          requestSoundRef.current = null;
+        }
+
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: incomingRequestChimeUri },
+          { shouldPlay: true, volume: 0.55 }
+        );
+
+        if (cancelled) {
+          await sound.unloadAsync();
+          return;
+        }
+
+        requestSoundRef.current = sound;
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            void sound.unloadAsync();
+            if (requestSoundRef.current === sound) {
+              requestSoundRef.current = null;
+            }
+          }
+        });
+      } catch {
+        // Non-fatal: request UI should still work even if audio playback fails.
+      }
+    };
+
+    void playIncomingSound();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [incomingRequests[0]?.id, incomingRequests.length, requestModalVisible, showHomeChrome]);
+
+  useEffect(() => {
+    if (requestModalVisible) return;
+    if (!requestSoundRef.current) return;
+
+    const sound = requestSoundRef.current;
+    requestSoundRef.current = null;
+    void sound.stopAsync().catch(() => undefined);
+    void sound.unloadAsync().catch(() => undefined);
+  }, [requestModalVisible]);
+
+  useEffect(() => {
+    return () => {
+      if (!requestSoundRef.current) return;
+      const sound = requestSoundRef.current;
+      requestSoundRef.current = null;
+      void sound.stopAsync().catch(() => undefined);
+      void sound.unloadAsync().catch(() => undefined);
+    };
+  }, []);
 
   const handleAccept = (requestId: string) => {
     const request = incomingRequests.find((item) => item.id === requestId);
@@ -1255,7 +1348,25 @@ export default function DriverHomeScreen() {
             onRequestClose={() => handleDecline(request.id)}
           >
             <View style={styles.requestModalCenteredOverlay}>
-            <View style={[styles.requestModalSheet, { backgroundColor: ui.panelBg }]}>
+            <Animated.View
+              style={[
+                styles.requestModalSheet,
+                {
+                  backgroundColor: ui.panelBg,
+                  transform: [{ scale: requestModalPulse }],
+                },
+              ]}
+            > 
+              <View style={styles.requestModalHeader}>
+                <View style={styles.requestModalHeaderLeft}>
+                  <View style={styles.requestModalLiveDot} />
+                  <View style={styles.requestModalHeaderTextWrap}>
+                    <Text style={[styles.requestModalEyebrow, { color: ui.text }]}>Incoming Request</Text>
+                    <Text style={[styles.requestModalSubhead, { color: ui.textMuted }]}>Respond before another driver accepts it.</Text>
+                  </View>
+                </View>
+                <Ionicons name="notifications" size={18} color={ui.text} />
+              </View>
               {/* Mini map */}
               <View style={styles.requestModalMap}>
                 <MapView
@@ -1330,7 +1441,7 @@ export default function DriverHomeScreen() {
                 isDark={isDark}
                 borderColor={ui.border}
               />
-            </View>
+            </Animated.View>
             </View>
           </Modal>
         );
@@ -1636,6 +1747,37 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     gap: 14,
     overflow: 'hidden',
+  },
+  requestModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  requestModalHeaderLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  requestModalHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  requestModalLiveDot: {
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: '#ef4444',
+  },
+  requestModalEyebrow: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#171717',
+  },
+  requestModalSubhead: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   requestModalMap: {
     height: 160,
