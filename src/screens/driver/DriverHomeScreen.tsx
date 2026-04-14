@@ -15,7 +15,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Circle, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { clearAppCache } from '../../lib/appCacheStorage';
 import { useAuth } from '../../context/AuthContext';
 import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../../lib/haptics';
@@ -196,8 +196,8 @@ function getStatusSummary(status: DriverTripStatus, paymentLabel: 'Card' | 'Cash
   }
 }
 
-const DRIVER_TRACK_H = 68;
-const DRIVER_THUMB_W = 64;
+const DRIVER_TRACK_H = 52;
+const DRIVER_THUMB_W = 50;
 
 type SwipeToActionProps = {
   onAccept: () => void;
@@ -1091,6 +1091,40 @@ export default function DriverHomeScreen() {
                   </Text>
                 </View>
               )}
+              {/* Mini map */}
+              <View style={styles.requestModalMap}>
+                <MapView
+                  provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+                  style={StyleSheet.absoluteFillObject}
+                  pointerEvents="none"
+                  scrollEnabled={false}
+                  zoomEnabled={false}
+                  rotateEnabled={false}
+                  pitchEnabled={false}
+                  showsUserLocation={false}
+                  showsMyLocationButton={false}
+                  showsCompass={false}
+                  toolbarEnabled={false}
+                  initialRegion={{
+                    latitude: (request.pickupCoordinate.latitude + request.dropoffCoordinate.latitude) / 2,
+                    longitude: (request.pickupCoordinate.longitude + request.dropoffCoordinate.longitude) / 2,
+                    latitudeDelta: Math.abs(request.pickupCoordinate.latitude - request.dropoffCoordinate.latitude) * 2.2 + 0.02,
+                    longitudeDelta: Math.abs(request.pickupCoordinate.longitude - request.dropoffCoordinate.longitude) * 2.2 + 0.02,
+                  }}
+                >
+                  <Polyline
+                    coordinates={[request.pickupCoordinate, request.dropoffCoordinate]}
+                    strokeColor="#FFD000"
+                    strokeWidth={3}
+                  />
+                  <Marker coordinate={request.pickupCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+                    <View style={styles.pickupMarker} />
+                  </Marker>
+                  <Marker coordinate={request.dropoffCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
+                    <View style={styles.dropoffMarker} />
+                  </Marker>
+                </MapView>
+              </View>
               {/* Top row: name + fare */}
               <View style={styles.requestTopRow}>
                 <View style={{ flex: 1 }}>
@@ -1383,6 +1417,13 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 24,
     gap: 14,
+    overflow: 'hidden',
+  },
+  requestModalMap: {
+    height: 160,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginHorizontal: -4,
   },
   requestModalQueueBadge: {
     alignSelf: 'center',
