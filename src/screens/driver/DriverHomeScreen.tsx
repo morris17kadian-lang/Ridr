@@ -299,6 +299,7 @@ export default function DriverHomeScreen() {
   type EarningsModal = null | 'earnings' | 'trips' | 'rating';
   const [earningsModal, setEarningsModal] = useState<EarningsModal>(null);
   const [incomingRequests, setIncomingRequests] = useState(incomingRequestsSeed);
+  const [requestModalVisible, setRequestModalVisible] = useState(false);
   const [currentTrip, setCurrentTrip] = useState<DriverTrip | null>(null);
   const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || 'Driver');
   const [profileLastName, setProfileLastName] = useState(user?.lastName?.trim() || '');
@@ -418,6 +419,7 @@ export default function DriverHomeScreen() {
   const currentTripBadge = currentTrip ? getTripBadge(currentTrip.status) : null;
   const currentTripPrimaryAction = currentTrip ? getPrimaryAction(currentTrip.status) : null;
   const showHomeChrome = activeTab === 'home' && subScreen === null;
+  const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
   const profileDirty =
     editingFirstName.trim() !== profileFirstName.trim() ||
     editingLastName.trim() !== profileLastName.trim() ||
@@ -430,12 +432,26 @@ export default function DriverHomeScreen() {
   const mapDropoff = currentTrip?.dropoffCoordinate ?? incomingRequests[0]?.dropoffCoordinate ?? KSA_MAP_CENTER;
   const driverMarker = currentTrip?.pickupCoordinate ?? { latitude: KSA_MAP_CENTER.latitude + 0.008, longitude: KSA_MAP_CENTER.longitude - 0.006 };
 
+  useEffect(() => {
+    if (!showHomeChrome || !isOnline || isBusy || incomingRequests.length === 0) {
+      setRequestModalVisible(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setRequestModalVisible(true);
+    }, 600);
+
+    return () => clearTimeout(timeout);
+  }, [incomingRequests.length, isBusy, isOnline, showHomeChrome]);
+
   const handleAccept = (requestId: string) => {
     const request = incomingRequests.find((item) => item.id === requestId);
     if (!request || (currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled')) {
       return;
     }
     hapticMedium();
+    setRequestModalVisible(false);
     setCurrentTrip({
       ...request,
       status: 'matched',
@@ -446,6 +462,7 @@ export default function DriverHomeScreen() {
 
   const handleDecline = (requestId: string) => {
     hapticLight();
+    setRequestModalVisible(false);
     setIncomingRequests((prev) => prev.filter((request) => request.id !== requestId));
   };
 
@@ -1073,8 +1090,7 @@ export default function DriverHomeScreen() {
       {/* ── Incoming request modal ── */}
       {(() => {
         const request = incomingRequests[0];
-        const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
-        if (!request || !isOnline || isBusy) return null;
+        if (!request || !isOnline || isBusy || !showHomeChrome || !requestModalVisible) return null;
         
         return (
           <Modal
