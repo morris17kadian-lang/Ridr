@@ -4,7 +4,6 @@ import { BlurView } from 'expo-blur';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Animated,
   Modal,
   PanResponder,
   Platform,
@@ -19,7 +18,7 @@ import {
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { clearAppCache } from '../../lib/appCacheStorage';
 import { useAuth } from '../../context/AuthContext';
-import { hapticLight, hapticMedium, hapticSelection } from '../../lib/haptics';
+import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useAppTheme, type ThemeOverride } from '../../theme/ThemeProvider';
 import { KSA_MAP_CENTER, type LatLng } from '../main/locationResolve';
 import type { MainScreenUi } from '../main/mainScreenUi';
@@ -197,55 +196,94 @@ function getStatusSummary(status: DriverTripStatus, paymentLabel: 'Card' | 'Cash
   }
 }
 
+const DRIVER_TRACK_H = 68;
+const DRIVER_THUMB_W = 64;
+
 type SwipeToActionProps = {
   onAccept: () => void;
   onDecline: () => void;
   disabled: boolean;
-  trackBorder: string;
-  trackBg: string;
-  textMuted: string;
+  isDark: boolean;
+  borderColor: string;
 };
-function SwipeToAction({ onAccept, onDecline, disabled, trackBorder, trackBg, textMuted }: SwipeToActionProps) {
-  const pan = useRef(new Animated.Value(0)).current;
-  const THRESHOLD = 70;
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => !disabled,
-      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 4,
-      onPanResponderMove: (_, gs) => {
-        pan.setValue(Math.max(-110, Math.min(110, gs.dx)));
-      },
-      onPanResponderRelease: (_, gs) => {
-        if (gs.dx > THRESHOLD) {
-          Animated.spring(pan, { toValue: 130, useNativeDriver: true }).start(() => {
-            pan.setValue(0);
-            onAccept();
-          });
-        } else if (gs.dx < -THRESHOLD) {
-          Animated.spring(pan, { toValue: -130, useNativeDriver: true }).start(() => {
-            pan.setValue(0);
-            onDecline();
-          });
-        } else {
-          Animated.spring(pan, { toValue: 0, useNativeDriver: true }).start();
-        }
-      },
-    })
-  ).current;
+function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: SwipeToActionProps) {
+  const [drag, setDrag] = useState(0);
+  const [trackWidth, setTrackWidth] = useState(0);
+  const trackXInWindow = useRef(0);
 
-  const declineOpacity = pan.interpolate({ inputRange: [-110, -20, 0], outputRange: [1, 0.55, 0.25], extrapolate: 'clamp' });
-  const acceptOpacity  = pan.interpolate({ inputRange: [0, 20, 110],  outputRange: [0.25, 0.55, 1], extrapolate: 'clamp' });
+  const halfTrack = Math.max(0, (trackWidth - DRIVER_THUMB_W) / 2);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !disabled,
+        onStartShouldSetPanResponderCapture: () => !disabled,
+        onMoveShouldSetPanResponder: () => !disabled,
+        onMoveShouldSetPanResponderCapture: () => !disabled,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (_, g) => {
+          const raw = g.moveX - trackXInWindow.current - trackWidth / 2;
+          setDrag(Math.max(-halfTrack, Math.min(halfTrack, raw)));
+        },
+        onPanResponderMove: (_, g) => {
+          const raw = g.moveX - trackXInWindow.current - trackWidth / 2;
+          setDrag(Math.max(-halfTrack, Math.min(halfTrack, raw)));
+        },
+        onPanResponderRelease: (_, g) => {
+          const raw = g.moveX - trackXInWindow.current - trackWidth / 2;
+          const clamped = Math.max(-halfTrack, Math.min(halfTrack, raw));
+          if (halfTrack > 0 && clamped >= halfTrack * 0.65) {
+            setDrag(halfTrack);
+            hapticSuccess();
+            setTimeout(() => { setDrag(0); onAccept(); }, 180);
+          } else if (halfTrack > 0 && clamped <= -halfTrack * 0.65) {
+            setDrag(-halfTrack);
+            hapticMedium();
+            setTimeout(() => { setDrag(0); onDecline(); }, 180);
+          } else {
+            setDrag(0);
+          }
+        },
+      }),
+    [disabled, halfTrack, onAccept, onDecline]
+  );
+
+  const thumbLeft = halfTrack + drag;
+  const redFillWidth  = drag < 0 ? -drag : 0;
+  const greenFillWidth = drag > 0 ?  drag : 0;
+  const declineOpacity = halfTrack > 0 ? Math.min(1, Math.max(0.3, (-drag) / halfTrack)) : 0.3;
+  const acceptOpacity  = halfTrack > 0 ? Math.min(1, Math.max(0.3, drag   / halfTrack)) : 0.3;
 
   return (
-    <View style={[styles.swipeTrack, { borderColor: trackBorder }]}>
-      <Animated.Text style={[styles.swipeDeclineLabel, { opacity: declineOpacity }]}>← Decline</Animated.Text>
-      <Animated.View
-        style={[styles.swipeThumb, { backgroundColor: trackBg, transform: [{ translateX: pan }] }]}
-        {...panResponder.panHandlers}
+    <View
+      style={[styles.swipeTrack, {
+        backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+        borderColor,
+      }]}
+      {...panResponder.panHandlers}
+      onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+      onTouchStart={(e) => {
+        trackXInWindow.current = e.nativeEvent.pageX - e.nativeEvent.locationX;
+      }}
+    >
+      {/* Red (decline) fill — grows leftward from centre */}
+      <View
+        pointerEvents="none"
+        style={[styles.swipeFill, { backgroundColor: '#dc2626', right: trackWidth / 2, width: redFillWidth, opacity: redFillWidth > 0 ? 1 : 0 }]}
+      />
+      {/* Green (accept) fill — grows rightward from centre */}
+      <View
+        pointerEvents="none"
+        style={[styles.swipeFill, { backgroundColor: '#16a34a', left: trackWidth / 2, width: greenFillWidth, opacity: greenFillWidth > 0 ? 1 : 0 }]}
+      />
+      <Text style={[styles.swipeDeclineLabel, { opacity: declineOpacity }]} pointerEvents="none">← Decline</Text>
+      <Text style={[styles.swipeAcceptLabel, { opacity: acceptOpacity }]} pointerEvents="none">Accept →</Text>
+      <View
+        style={[styles.swipeThumb, { backgroundColor: '#171717', transform: [{ translateX: thumbLeft }] }]}
+        pointerEvents="none"
       >
-        <Ionicons name="swap-horizontal-outline" size={18} color={textMuted} />
-      </Animated.View>
-      <Animated.Text style={[styles.swipeAcceptLabel, { opacity: acceptOpacity }]}>Accept →</Animated.Text>
+        <Ionicons name="swap-horizontal-outline" size={22} color="#FFD000" />
+      </View>
     </View>
   );
 }
@@ -881,9 +919,8 @@ export default function DriverHomeScreen() {
                 onAccept={() => handleAccept(request.id)}
                 onDecline={() => handleDecline(request.id)}
                 disabled={!isOnline || !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled')}
-                trackBorder={ui.border}
-                trackBg={ui.soft}
-                textMuted={ui.textMuted}
+                isDark={isDark}
+                borderColor={ui.border}
               />
             </View>
           ))}
@@ -1831,38 +1868,48 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   swipeTrack: {
-    height: 52,
-    borderRadius: 14,
+    height: DRIVER_TRACK_H,
+    borderRadius: DRIVER_TRACK_H / 2,
     borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
     overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  swipeFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
   },
   swipeThumb: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: DRIVER_THUMB_W,
+    height: DRIVER_TRACK_H,
+    borderRadius: DRIVER_TRACK_H / 2,
+    zIndex: 3,
     justifyContent: 'center',
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.14,
-    shadowRadius: 5,
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
     elevation: 4,
   },
   swipeDeclineLabel: {
+    position: 'absolute',
+    left: 24,
     color: '#dc2626',
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '800',
-    letterSpacing: 0.2,
+    zIndex: 2,
   },
   swipeAcceptLabel: {
+    position: 'absolute',
+    right: 24,
     color: '#16a34a',
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '800',
-    letterSpacing: 0.2,
+    zIndex: 2,
   },
   tripHistoryCard: {
     borderRadius: 18,
