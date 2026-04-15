@@ -19,7 +19,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { clearAppCache } from '../../lib/appCacheStorage';
 import { incomingRequestChimeUri } from '../../lib/incomingRequestChime';
 import { useAuth } from '../../context/AuthContext';
@@ -70,7 +70,7 @@ type IncomingRequest = {
   paymentLabel: 'Card' | 'Cash';
 };
 
-type DriverTripStatus = Extract<TripStatus, 'matched' | 'driver_arriving' | 'arrived' | 'in_trip' | 'completed' | 'cancelled'>;
+type DriverTripStatus = Extract<TripStatus, 'matched' | 'arrived' | 'completed' | 'cancelled'>;
 
 type DriverTrip = IncomingRequest & {
   status: DriverTripStatus;
@@ -84,9 +84,7 @@ type DriverTrip = IncomingRequest & {
 
 const DRIVER_PROGRESS_STEPS: Array<{ key: DriverTripStatus; label: string }> = [
   { key: 'matched', label: 'Accepted' },
-  { key: 'driver_arriving', label: 'On the way' },
   { key: 'arrived', label: 'Arrived' },
-  { key: 'in_trip', label: 'In trip' },
   { key: 'completed', label: 'Completed' },
 ];
 
@@ -131,22 +129,6 @@ const incomingRequestsSeed: IncomingRequest[] = [
 
 type DemandLevel = 'critical' | 'high' | 'medium' | 'low';
 
-const DEMAND_ZONES: Array<{
-  id: string;
-  coordinate: { latitude: number; longitude: number };
-  radius: number;
-  demand: DemandLevel;
-  fillColor: string;
-  strokeColor: string;
-}> = [
-  { id: 'dz-ht', coordinate: { latitude: 18.0062, longitude: -76.7971 }, radius: 750, demand: 'critical', fillColor: 'rgba(239,68,68,0.22)', strokeColor: 'rgba(239,68,68,0.60)' },
-  { id: 'dz-nk', coordinate: { latitude: 18.0081, longitude: -76.7832 }, radius: 520, demand: 'high', fillColor: 'rgba(249,115,22,0.20)', strokeColor: 'rgba(249,115,22,0.55)' },
-  { id: 'dz-li', coordinate: { latitude: 18.0137, longitude: -76.7474 }, radius: 600, demand: 'medium', fillColor: 'rgba(234,179,8,0.18)', strokeColor: 'rgba(234,179,8,0.50)' },
-  { id: 'dz-dk', coordinate: { latitude: 17.977, longitude: -76.7915 }, radius: 460, demand: 'high', fillColor: 'rgba(249,115,22,0.18)', strokeColor: 'rgba(249,115,22,0.45)' },
-  { id: 'dz-po', coordinate: { latitude: 17.9505, longitude: -76.8828 }, radius: 420, demand: 'low', fillColor: 'rgba(34,197,94,0.15)', strokeColor: 'rgba(34,197,94,0.38)' },
-  { id: 'dz-ai', coordinate: { latitude: 17.936, longitude: -76.7875 }, radius: 380, demand: 'medium', fillColor: 'rgba(234,179,8,0.15)', strokeColor: 'rgba(234,179,8,0.42)' },
-];
-
 const completedTripsSeed = [
   { id: 'done-1', riderName: 'Marsha B.', route: 'New Kingston to Barbican', fare: 'J$1,540', when: 'Today, 9:10 AM' },
   { id: 'done-2', riderName: 'Kevin T.', route: 'Half-Way Tree to Portmore', fare: 'J$2,980', when: 'Today, 7:35 AM' },
@@ -157,12 +139,8 @@ function getTripBadge(status: DriverTripStatus): { label: string; bg: string; te
   switch (status) {
     case 'matched':
       return { label: 'Accepted', bg: '#fef3c7', text: '#92400e' };
-    case 'driver_arriving':
-      return { label: 'On the way', bg: '#dbeafe', text: '#1d4ed8' };
     case 'arrived':
       return { label: 'At pickup', bg: '#ede9fe', text: '#6d28d9' };
-    case 'in_trip':
-      return { label: 'In trip', bg: '#dcfce7', text: '#166534' };
     case 'completed':
       return { label: 'Completed', bg: '#dcfce7', text: '#166534' };
     case 'cancelled':
@@ -173,13 +151,9 @@ function getTripBadge(status: DriverTripStatus): { label: string; bg: string; te
 function getPrimaryAction(status: DriverTripStatus): { label: string; icon: keyof typeof Ionicons.glyphMap } | null {
   switch (status) {
     case 'matched':
-      return { label: 'Head to pickup', icon: 'navigate-outline' };
-    case 'driver_arriving':
       return { label: 'Mark arrived', icon: 'location-outline' };
     case 'arrived':
       return { label: 'Start trip', icon: 'play-outline' };
-    case 'in_trip':
-      return { label: 'Complete trip', icon: 'checkmark-circle-outline' };
     default:
       return null;
   }
@@ -188,13 +162,9 @@ function getPrimaryAction(status: DriverTripStatus): { label: string; icon: keyo
 function getStatusSummary(status: DriverTripStatus, paymentLabel: 'Card' | 'Cash'): string {
   switch (status) {
     case 'matched':
-      return 'Trip accepted. Start heading to the pickup point.';
-    case 'driver_arriving':
-      return 'You are en route to the rider. Mark arrived once you reach pickup.';
+      return 'Trip accepted. Head to the pickup point.';
     case 'arrived':
       return 'You are at pickup. Start the trip when the rider is onboard.';
-    case 'in_trip':
-      return `Trip is active. ${paymentLabel === 'Cash' ? 'Collect cash at dropoff.' : 'Payment will be captured by card.'}`;
     case 'completed':
       return 'Trip is complete and ready to be archived.';
     case 'cancelled':
@@ -215,7 +185,7 @@ function formatMinSec(totalSec: number): string {
 }
 
 function generateTripStartPin(): string {
-  return String(1000 + Math.floor(Math.random() * 9000));
+  return String(10000 + Math.floor(Math.random() * 90000));
 }
 
 function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: string; icon: keyof typeof Ionicons.glyphMap } {
@@ -225,12 +195,8 @@ function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: 
   switch (trip.status) {
     case 'matched':
       return { title: 'Ride accepted. Head to pickup', pill: `${formatMinSec(etaCountdownSec)} Mins`, icon: 'checkmark-circle-outline' };
-    case 'driver_arriving':
-      return { title: 'You are on the way to the rider', pill: `${formatMinSec(etaCountdownSec)} Mins`, icon: 'navigate-outline' };
     case 'arrived':
       return { title: 'You have arrived at pickup', pill: 'Arrived', icon: 'location-outline' };
-    case 'in_trip':
-      return { title: 'Trip in progress', pill: tick % 2 === 0 ? 'Live' : 'En route', icon: 'car-sport-outline' };
     case 'completed':
       return { title: 'Trip completed', pill: 'Done', icon: 'checkmark-done-outline' };
     case 'cancelled':
@@ -296,8 +262,11 @@ function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: S
   const thumbLeft = halfTrack + drag;
   const redFillWidth   = drag < 0 ? -drag : 0;
   const greenFillWidth = drag > 0  ?  drag : 0;
-  const declineOpacity = halfTrack > 0 ? Math.min(1, Math.max(0.3, (-drag) / halfTrack)) : 0.3;
-  const acceptOpacity  = halfTrack > 0 ? Math.min(1, Math.max(0.3,   drag  / halfTrack)) : 0.3;
+  const declineFraction = halfTrack > 0 ? Math.min(1, Math.max(0, (-drag) / halfTrack)) : 0;
+  const acceptFraction  = halfTrack > 0 ? Math.min(1, Math.max(0,   drag  / halfTrack)) : 0;
+  const lerpColor = (t: number, r0: number, g0: number, b0: number) => `rgb(${Math.round(r0+(255-r0)*t)},${Math.round(g0+(255-g0)*t)},${Math.round(b0+(255-b0)*t)})`;
+  const declineColor = lerpColor(declineFraction, 220, 38, 38);   // red → white
+  const acceptColor  = lerpColor(acceptFraction,  22, 163, 74);   // green → white
 
   return (
     <View
@@ -323,8 +292,8 @@ function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: S
         pointerEvents="none"
         style={[styles.swipeFill, { backgroundColor: '#16a34a', left: halfTrack + DRIVER_THUMB_W / 2, width: greenFillWidth, opacity: greenFillWidth > 0 ? 1 : 0 }]}
       />
-      <Text style={[styles.swipeDeclineLabel, { opacity: declineOpacity }]} pointerEvents="none">← Decline</Text>
-      <Text style={[styles.swipeAcceptLabel, { opacity: acceptOpacity }]} pointerEvents="none">Accept →</Text>
+      <Text style={[styles.swipeDeclineLabel, { color: declineColor }]} pointerEvents="none">← Decline</Text>
+      <Text style={[styles.swipeAcceptLabel, { color: acceptColor }]} pointerEvents="none">Accept →</Text>
       <View
         style={[styles.swipeThumb, { backgroundColor: '#171717', transform: [{ translateX: thumbLeft }] }]}
         pointerEvents="none"
@@ -341,7 +310,7 @@ export default function DriverHomeScreen() {
   const [activeTab, setActiveTab] = useState<DriverTab>('home');
   const [subScreen, setSubScreen] = useState<DriverSubScreen>(null);
   const [isOnline, setIsOnline] = useState(true);
-  const [surgeMultiplier] = useState(2.1);
+  const [surgeMultiplier] = useState(2.1); // reserved for future use
   type EarningsModal = null | 'earnings' | 'trips' | 'rating';
   const [earningsModal, setEarningsModal] = useState<EarningsModal>(null);
   const [incomingRequests, setIncomingRequests] = useState(incomingRequestsSeed);
@@ -353,7 +322,9 @@ export default function DriverHomeScreen() {
   const [tripPinInput, setTripPinInput] = useState('');
   const [tripPinError, setTripPinError] = useState('');
   const requestModalPulse = useRef(new Animated.Value(1)).current;
+  const requestModalPan = useRef(new Animated.ValueXY()).current;
   const requestSoundRef = useRef<Audio.Sound | null>(null);
+  const pinInputRef = useRef<TextInput>(null);
   const driverSheetPan = useRef(new Animated.Value(0)).current;
   const driverSheetOffset = useRef(new Animated.Value(0)).current;
   const [driverSheetMinimized, setDriverSheetMinimized] = useState(false);
@@ -491,7 +462,7 @@ export default function DriverHomeScreen() {
   }, [currentTrip?.id, currentTrip?.status]);
 
   useEffect(() => {
-    if (!currentTrip || currentTrip.status === 'cancelled' || currentTrip.status === 'completed' || currentTrip.status === 'in_trip') {
+    if (!currentTrip || currentTrip.status === 'cancelled' || currentTrip.status === 'completed') {
       setTripPinModalVisible(false);
       setTripPinInput('');
       setTripPinError('');
@@ -546,6 +517,22 @@ export default function DriverHomeScreen() {
       }),
     ]).start();
   };
+
+  const requestModalPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        requestModalPan.extractOffset();
+      },
+      onPanResponderMove: Animated.event(
+        [null, { dx: requestModalPan.x, dy: requestModalPan.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: () => {
+        requestModalPan.extractOffset();
+      },
+    })
+  ).current;
 
   const driverSheetPanResponder = useRef(
     PanResponder.create({
@@ -694,6 +681,13 @@ export default function DriverHomeScreen() {
   }, [incomingRequests[0]?.id, incomingRequests.length, requestModalVisible, showHomeChrome]);
 
   useEffect(() => {
+    if (requestModalVisible) {
+      requestModalPan.setValue({ x: 0, y: 0 });
+      requestModalPan.setOffset({ x: 0, y: 0 });
+    }
+  }, [requestModalVisible]);
+
+  useEffect(() => {
     if (requestModalVisible) return;
     if (!requestSoundRef.current) return;
 
@@ -724,7 +718,7 @@ export default function DriverHomeScreen() {
     setCurrentTrip({
       ...request,
       status: 'matched',
-      startPin: generateTripStartPin(),
+      startPin: '12345',
       acceptedAtMs: Date.now(),
     });
     setIncomingRequests((prev) => prev.filter((item) => item.id !== requestId));
@@ -750,9 +744,7 @@ export default function DriverHomeScreen() {
     hapticMedium();
     setCurrentTrip((prev) => {
       if (!prev) return prev;
-      if (prev.status === 'matched') return { ...prev, status: 'driver_arriving' };
-      if (prev.status === 'driver_arriving') return { ...prev, status: 'arrived', arrivedAtMs: Date.now() };
-      if (prev.status === 'in_trip') return { ...prev, status: 'completed', completedAtMs: Date.now() };
+      if (prev.status === 'matched') return { ...prev, status: 'arrived', arrivedAtMs: Date.now() };
       return prev;
     });
   };
@@ -760,9 +752,9 @@ export default function DriverHomeScreen() {
   const confirmTripStartPin = () => {
     if (!currentTrip) return;
 
-    const normalizedPin = tripPinInput.replace(/\D/g, '').slice(0, 4);
-    if (normalizedPin.length !== 4) {
-      setTripPinError('Enter the 4-digit rider PIN to start the trip.');
+    const normalizedPin = tripPinInput.replace(/\D/g, '').slice(0, 5);
+    if (normalizedPin.length !== 5) {
+      setTripPinError('Enter the 5-digit rider PIN to start the trip.');
       return;
     }
 
@@ -776,7 +768,7 @@ export default function DriverHomeScreen() {
     setTripPinModalVisible(false);
     setTripPinInput('');
     setTripPinError('');
-    setCurrentTrip((prev) => (prev ? { ...prev, status: 'in_trip', startedAtMs: Date.now() } : prev));
+    setCurrentTrip((prev) => (prev ? { ...prev, status: 'completed', completedAtMs: Date.now() } : prev));
   };
 
   const cancelCurrentTrip = () => {
@@ -1163,95 +1155,90 @@ export default function DriverHomeScreen() {
                 </View>
                 <View style={styles.currentTripContactActions}>
                   <Pressable
-                    style={[styles.currentTripContactBtn, { backgroundColor: ui.card }]}
+                    style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
                     onPress={() => {
                       hapticLight();
                       Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`);
                     }}
                   >
-                    <Ionicons name="call" size={18} color="#FFD000" />
+                    <Ionicons name="call" size={17} color="#FFD000" />
                   </Pressable>
                   <Pressable
-                    style={[styles.currentTripContactBtn, { backgroundColor: ui.card }]}
+                    style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
                     onPress={() => {
                       hapticLight();
                       Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`);
                     }}
                   >
-                    <Ionicons name="chatbubble-ellipses" size={17} color="#FFD000" />
+                    <Ionicons name="chatbubble-ellipses" size={16} color="#FFD000" />
                   </Pressable>
                 </View>
               </View>
 
-              <Text style={[styles.currentTripStatusSummary, { color: ui.textMuted }]}>{getStatusSummary(currentTrip.status, currentTrip.paymentLabel)}</Text>
+              <View style={[styles.routePill, { backgroundColor: ui.card }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ width: 10, alignItems: 'center' }}>
+                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
+                  </View>
+                  <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{currentTrip.pickup}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', paddingVertical: 6 }}>
+                  <View style={{ width: 10, alignItems: 'center' }}>
+                    <View style={[styles.routeConnector, { backgroundColor: ui.textMuted, height: 22, opacity: 0.4 }]} />
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ width: 10, alignItems: 'center' }}>
+                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
+                  </View>
+                  <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{currentTrip.dropoff}</Text>
+                </View>
+              </View>
 
               <View style={styles.currentTripStageRow}>
                 {DRIVER_PROGRESS_STEPS.map((step, index) => {
                   const isActive = index <= progressIndex;
                   const isCurrent = currentTrip.status === step.key;
+                  const isNext = index === progressIndex + 1;
+                  const isCompleted = currentTrip.status === 'completed' || currentTrip.status === 'cancelled';
+                  const canTap = (!isCompleted && isNext) || (isCurrent && step.key === 'arrived');
                   return (
-                    <View
+                    <Pressable
                       key={step.key}
-                      style={[
-                        styles.currentTripStageChip,
-                        {
-                          backgroundColor: isCurrent ? '#171717' : isActive ? 'rgba(255,208,0,0.18)' : ui.card,
-                          borderColor: isCurrent ? '#171717' : ui.border,
-                        },
-                      ]}
+                      style={[styles.tripPhasePill, {
+                        backgroundColor: isCurrent ? '#FFD000'
+                          : isActive ? '#171717'
+                          : ui.card,
+                        borderColor: isCurrent ? '#FFD000' : isActive ? '#171717' : ui.border,
+                        opacity: canTap ? 1 : isNext ? 0.45 : 1,
+                      }]}
+                      onPress={() => {
+                        if (!canTap) return;
+                        if (step.key === 'arrived') {
+                          if (currentTrip.status === 'matched') {
+                            hapticMedium();
+                            setCurrentTrip((prev) => prev ? { ...prev, status: 'arrived', arrivedAtMs: Date.now() } : prev);
+                          } else {
+                            hapticLight();
+                          }
+                          setTripPinInput('');
+                          setTripPinError('');
+                          setTripPinModalVisible(true);
+                        } else if (step.key === 'completed') {
+                          advanceTrip();
+                        }
+                      }}
                     >
-                      <View
-                        style={[
-                          styles.currentTripStageDot,
-                          { backgroundColor: isCurrent ? '#FFD000' : isActive ? '#facc15' : ui.border },
-                        ]}
-                      />
-                      <Text
-                        style={[
-                          styles.currentTripStageText,
-                          { color: isCurrent ? '#ffffff' : isActive ? ui.text : ui.textMuted },
-                        ]}
-                      >
+                      <Text style={[styles.tripPhasePillText, {
+                        color: isCurrent ? '#171717' : isActive ? '#FFD000' : ui.textMuted,
+                      }]}>
                         {step.label}
                       </Text>
-                    </View>
+                    </Pressable>
                   );
                 })}
               </View>
 
-              <View style={[styles.routePill, { backgroundColor: ui.card }]}> 
-                <View style={styles.routeLineContainer}>
-                  <View style={styles.routeDotsCol}>
-                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
-                    <View style={[styles.routeConnector, { backgroundColor: ui.border }]} />
-                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
-                  </View>
-                  <View style={styles.routeTextsCol}>
-                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{currentTrip.pickup}</Text>
-                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{currentTrip.dropoff}</Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.currentTripActions}>
-                {currentTripPrimaryAction ? (
-                  <Pressable style={[styles.primaryButton, styles.currentTripPrimaryButton, { backgroundColor: ui.accent }]} onPress={advanceTrip}>
-                    <Ionicons name={currentTripPrimaryAction.icon} size={16} color="#171717" />
-                    <Text style={styles.primaryButtonText}>{currentTripPrimaryAction.label}</Text>
-                  </Pressable>
-                ) : (
-                  <Pressable style={[styles.primaryButton, styles.currentTripPrimaryButton, { backgroundColor: ui.accent }]} onPress={clearResolvedTrip}>
-                    <Ionicons name="checkmark-done-outline" size={16} color="#171717" />
-                    <Text style={styles.primaryButtonText}>Clear trip card</Text>
-                  </Pressable>
-                )}
-                {currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled' ? (
-                  <Pressable style={[styles.secondaryButton, styles.currentTripSecondaryButton, { borderColor: ui.border, backgroundColor: ui.card }]} onPress={cancelCurrentTrip}>
-                    <Ionicons name="close-circle-outline" size={16} color={ui.text} />
-                    <Text style={[styles.secondaryButtonText, { color: ui.text }]}>Cancel trip</Text>
-                  </Pressable>
-                ) : null}
-              </View>
             </View>
           ) : null}
         </View>
@@ -1313,16 +1300,6 @@ export default function DriverHomeScreen() {
             showsCompass={false}
             toolbarEnabled={false}
           >
-            {DEMAND_ZONES.map((zone) => (
-              <Circle
-                key={zone.id}
-                center={zone.coordinate}
-                radius={zone.radius}
-                fillColor={zone.fillColor}
-                strokeColor={zone.strokeColor}
-                strokeWidth={1.5}
-              />
-            ))}
             <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={styles.pickupMarker} />
             </Marker>
@@ -1335,25 +1312,6 @@ export default function DriverHomeScreen() {
               </View>
             </Marker>
           </MapView>
-          {/* Surge multiplier badge */}
-          <View style={styles.surgeBadge}>
-            <View style={styles.surgeDot} />
-            <Text style={styles.surgeMultText}>{surgeMultiplier.toFixed(1)}x</Text>
-            <Text style={styles.surgeLabel}>Surge</Text>
-          </View>
-          {/* Demand legend */}
-          <View style={styles.demandLegend}>
-            {(['critical', 'high', 'medium', 'low'] as DemandLevel[]).map((level) => {
-              const dot: Record<DemandLevel, string> = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e' };
-              const lbl: Record<DemandLevel, string> = { critical: 'Critical', high: 'High', medium: 'Med', low: 'Low' };
-              return (
-                <View key={level} style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: dot[level] }]} />
-                  <Text style={styles.legendText}>{lbl[level]}</Text>
-                </View>
-              );
-            })}
-          </View>
         </View>
       ) : null}
 
@@ -1404,9 +1362,8 @@ export default function DriverHomeScreen() {
               transform: [{ translateY: Animated.add(driverSheetPan, driverSheetOffset) }],
             },
           ]}
-          {...driverSheetPanResponder.panHandlers}
         > 
-          {showHomeChrome ? <View style={[styles.sheetDragHandle, { backgroundColor: ui.border }]} /> : null}
+          {showHomeChrome ? <View style={[styles.sheetDragHandle, { backgroundColor: ui.border }]} {...driverSheetPanResponder.panHandlers} /> : null}
           {activeTab === 'settings' ? renderSettingsTab() : (
             <ScrollView
               contentContainerStyle={[styles.content, showHomeChrome ? styles.contentHome : styles.contentFlat]}
@@ -1478,44 +1435,44 @@ export default function DriverHomeScreen() {
                 styles.requestModalSheet,
                 {
                   backgroundColor: ui.panelBg,
-                  transform: [{ scale: requestModalPulse }],
+                  transform: [
+                    ...requestModalPan.getTranslateTransform(),
+                    { scale: requestModalPulse },
+                  ],
                 },
               ]}
             > 
-              <View style={styles.requestModalHeader}>
+              <View style={styles.requestModalHeader} {...requestModalPanResponder.panHandlers}>
                 <View style={styles.requestModalHeaderLeft}>
-                  <View style={styles.requestModalLiveDot} />
                   <Text style={[styles.requestModalEyebrow, { color: ui.text }]}>{request.riderName}</Text>
                 </View>
-                <View style={styles.requestModalPersonBadge}>
-                  <Ionicons name="person" size={16} color="#ffffff" />
-                </View>
+                <Text style={[styles.requestFare, { color: '#16a34a' }]}>{request.fare}</Text>
               </View>
               {/* Mini map */}
               <View style={styles.requestModalMap}>
                 <MapView
                   provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
                   style={StyleSheet.absoluteFillObject}
-                  pointerEvents="none"
-                  scrollEnabled={false}
-                  zoomEnabled={false}
-                  rotateEnabled={false}
+                  scrollEnabled
+                  zoomEnabled
+                  rotateEnabled
                   pitchEnabled={false}
                   showsUserLocation={false}
                   showsMyLocationButton={false}
-                  showsCompass={false}
+                  showsCompass
                   toolbarEnabled={false}
                   initialRegion={{
                     latitude: (request.pickupCoordinate.latitude + request.dropoffCoordinate.latitude) / 2,
                     longitude: (request.pickupCoordinate.longitude + request.dropoffCoordinate.longitude) / 2,
-                    latitudeDelta: Math.abs(request.pickupCoordinate.latitude - request.dropoffCoordinate.latitude) * 2.2 + 0.02,
-                    longitudeDelta: Math.abs(request.pickupCoordinate.longitude - request.dropoffCoordinate.longitude) * 2.2 + 0.02,
+                    latitudeDelta: Math.abs(request.pickupCoordinate.latitude - request.dropoffCoordinate.latitude) * 2.4 + 0.025,
+                    longitudeDelta: Math.abs(request.pickupCoordinate.longitude - request.dropoffCoordinate.longitude) * 2.4 + 0.025,
                   }}
                 >
                   <Polyline
                     coordinates={[request.pickupCoordinate, request.dropoffCoordinate]}
                     strokeColor="#FFD000"
-                    strokeWidth={3}
+                    strokeWidth={4}
+                    lineDashPattern={[8, 4]}
                   />
                   <Marker coordinate={request.pickupCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
                     <View style={styles.pickupMarker} />
@@ -1523,16 +1480,19 @@ export default function DriverHomeScreen() {
                   <Marker coordinate={request.dropoffCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
                     <View style={styles.dropoffMarker} />
                   </Marker>
+                  <Marker coordinate={driverMarker} anchor={{ x: 0.5, y: 0.5 }}>
+                    <View style={styles.driverMarker}>
+                      <Ionicons name="car-sport" size={14} color="#ffffff" />
+                    </View>
+                  </Marker>
                 </MapView>
               </View>
-              {/* Top row: name + fare */}
+              {/* Top row: meta + payment */}
               <View style={styles.requestTopRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.requestName, { color: ui.text }]}>{request.riderName}</Text>
                   <Text style={[styles.requestMeta, { color: ui.textMuted }]}>{request.eta} · {request.distance}</Text>
                 </View>
                 <View style={styles.requestFareBlock}>
-                  <Text style={[styles.requestFare, { color: '#16a34a' }]}>{request.fare}</Text>
                   <LinearGradient
                     colors={request.paymentLabel === 'Cash' ? ['#16a34a', '#15803d'] : ['#2563eb', '#1d4ed8']}
                     start={{ x: 0, y: 0 }}
@@ -1545,16 +1505,22 @@ export default function DriverHomeScreen() {
               </View>
               {/* Route pill */}
               <View style={[styles.routePill, { backgroundColor: ui.soft }]}>
-                <View style={styles.routeLineContainer}>
-                  <View style={styles.routeDotsCol}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ width: 10, alignItems: 'center' }}>
                     <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
-                    <View style={[styles.routeConnector, { backgroundColor: ui.border }]} />
+                  </View>
+                  <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{request.pickup}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', paddingVertical: 6 }}>
+                  <View style={{ width: 10, alignItems: 'center' }}>
+                    <View style={[styles.routeConnector, { backgroundColor: ui.textMuted, height: 22, opacity: 0.4 }]} />
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ width: 10, alignItems: 'center' }}>
                     <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
                   </View>
-                  <View style={styles.routeTextsCol}>
-                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.pickup}</Text>
-                    <Text style={[styles.routePillText, { color: ui.text }]} numberOfLines={1}>{request.dropoff}</Text>
-                  </View>
+                  <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{request.dropoff}</Text>
                 </View>
               </View>
               {/* Swipe to accept / decline */}
@@ -1576,6 +1542,7 @@ export default function DriverHomeScreen() {
         animationType="fade"
         transparent
         statusBarTranslucent
+        onShow={() => setTimeout(() => pinInputRef.current?.focus(), 50)}
         onRequestClose={() => {
           setTripPinModalVisible(false);
           setTripPinInput('');
@@ -1586,18 +1553,37 @@ export default function DriverHomeScreen() {
           <View style={[styles.tripPinModalSheet, { backgroundColor: ui.panelBg }]}> 
             <Text style={[styles.modalTitle, { color: ui.text }]}>Start trip</Text>
             <Text style={[styles.tripPinModalCopy, { color: ui.textMuted }]}>Enter the 4-digit PIN the rider received after you accepted this trip.</Text>
+            {/* Hidden input captures keyboard */}
             <TextInput
+              ref={pinInputRef}
               value={tripPinInput}
               onChangeText={(value) => {
-                setTripPinInput(value.replace(/\D/g, '').slice(0, 4));
+                const digits = value.replace(/\D/g, '').slice(0, 5);
+                setTripPinInput(digits);
                 if (tripPinError) setTripPinError('');
+                if (digits.length === 5) confirmTripStartPin();
               }}
               keyboardType="number-pad"
-              maxLength={4}
-              placeholder="Enter rider PIN"
-              placeholderTextColor={ui.textMuted}
-              style={[styles.tripPinInput, { color: ui.text, borderColor: tripPinError ? '#dc2626' : ui.border, backgroundColor: ui.soft }]}
+              maxLength={5}
+              caretHidden
+              style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
             />
+            {/* Digit boxes */}
+            <Pressable style={styles.tripPinDigitRow} onPress={() => pinInputRef.current?.focus()}>
+              {[0, 1, 2, 3, 4].map((i) => (
+                <View
+                  key={i}
+                  style={[styles.tripPinDigitBox, {
+                    borderBottomColor: tripPinError ? '#dc2626' : tripPinInput.length === i ? ui.accent : tripPinInput.length > i ? ui.text : ui.border,
+                    borderBottomWidth: tripPinInput.length === i ? 2.5 : 1.5,
+                  }]}
+                >
+                  <Text style={[styles.tripPinDigitText, { color: ui.text }]}>
+                    {tripPinInput[i] ? '●' : ''}
+                  </Text>
+                </View>
+              ))}
+            </Pressable>
             {tripPinError ? (
               <Text style={styles.tripPinErrorText}>{tripPinError}</Text>
             ) : null}
@@ -1616,8 +1602,7 @@ export default function DriverHomeScreen() {
                 style={[styles.primaryButton, styles.tripPinPrimaryButton, { backgroundColor: ui.accent }]}
                 onPress={confirmTripStartPin}
               >
-                <Ionicons name="key-outline" size={16} color="#171717" />
-                <Text style={styles.primaryButtonText}>Verify PIN</Text>
+                <Text style={styles.primaryButtonText}>Start</Text>
               </Pressable>
             </View>
           </View>
@@ -1892,7 +1877,7 @@ const styles = StyleSheet.create({
   },
   requestModalEyebrow: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 22,
     fontWeight: '900',
     color: '#171717',
   },
@@ -1905,7 +1890,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   requestModalMap: {
-    height: 160,
+    height: 210,
     borderRadius: 16,
     overflow: 'hidden',
     marginHorizontal: -4,
@@ -1920,6 +1905,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     textAlign: 'center',
+  },
+  tripPinDigitRow: {
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'center',
+  },
+  tripPinDigitBox: {
+    flex: 1,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 8,
+  },
+  tripPinDigitText: {
+    fontSize: 26,
+    fontWeight: '900',
+    lineHeight: 30,
   },
   tripPinInput: {
     minHeight: 54,
@@ -2322,8 +2324,21 @@ const styles = StyleSheet.create({
   },
   currentTripStageRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
+  },
+  tripPhasePill: {
+    flex: 1,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  tripPhasePillText: {
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.2,
   },
   currentTripStageChip: {
     flexDirection: 'row',
@@ -2368,7 +2383,32 @@ const styles = StyleSheet.create({
   currentTripActions: {
     flexDirection: 'row',
     gap: 10,
-    flexWrap: 'wrap',
+  },
+  tripActionPill: {
+    flex: 1,
+    height: 44,
+    borderRadius: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 16,
+  },
+  tripActionPillPrimary: {
+    backgroundColor: '#FFD000',
+  },
+  tripActionPillPrimaryText: {
+    color: '#171717',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  tripActionPillCancel: {
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  tripActionPillCancelText: {
+    color: '#ef4444',
+    fontSize: 14,
+    fontWeight: '800',
   },
   currentTripPrimaryButton: {
     flex: 1,
@@ -2615,16 +2655,14 @@ const styles = StyleSheet.create({
   },
   swipeDeclineLabel: {
     position: 'absolute',
-    left: 24,
-    color: '#dc2626',
+    left: 48,
     fontSize: 15,
     fontWeight: '800',
     zIndex: 2,
   },
   swipeAcceptLabel: {
     position: 'absolute',
-    right: 24,
-    color: '#16a34a',
+    right: 48,
     fontSize: 15,
     fontWeight: '800',
     zIndex: 2,
