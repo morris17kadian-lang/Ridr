@@ -1,9 +1,21 @@
 import React, { type JSX } from 'react';
-import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { hapticLight, hapticMedium, hapticSelection } from '../../../lib/haptics';
-import { ACTIVITY_FILTERS, mockActivityFeed, type ActivityItem } from '../data/mainTabData';
+import {
+  ACTIVITY_FILTERS,
+  daysAgoForActivityItem,
+  type ActivityItem,
+} from '../data/mainTabData';
 import { mainTabStyles as styles } from '../styles/mainTabStyles';
 import type { ActiveTripState } from '../ride/activeTripTypes';
 
@@ -41,6 +53,8 @@ type Props = {
   homeAddress: string;
   workAddress: string;
   onBookAddress: (type: 'home' | 'work') => void;
+  /** From `GET /users/me/activity` or mock */
+  activityItems: ActivityItem[];
 };
 
 export function ActivityTabScreen({
@@ -62,6 +76,7 @@ export function ActivityTabScreen({
   homeAddress,
   workAddress,
   onBookAddress,
+  activityItems,
 }: Props) {
   const presentRideMinutesLeft =
     presentRide ? Math.max(0, Math.ceil((presentRide.expiresAtMs - Date.now()) / 60000)) : 0;
@@ -98,7 +113,10 @@ export function ActivityTabScreen({
         ) : null}
       </View>
       <ScrollView
-        contentContainerStyle={styles.tabScreenContent}
+        nestedScrollEnabled={Platform.OS === 'android'}
+        keyboardShouldPersistTaps="handled"
+        alwaysBounceVertical
+        contentContainerStyle={[styles.tabScreenContent, { flexGrow: 1 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -106,10 +124,18 @@ export function ActivityTabScreen({
             onRefresh={onRefresh}
             tintColor={ui.textMuted}
             colors={[isDark ? '#f5f5f5' : '#171717']}
+            progressViewOffset={Platform.OS === 'android' ? 8 : undefined}
           />
         }
       >
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activityFilterRow} contentContainerStyle={styles.activityFilterContent}>
+        <ScrollView
+          horizontal
+          nestedScrollEnabled={Platform.OS === 'android'}
+          keyboardShouldPersistTaps="handled"
+          showsHorizontalScrollIndicator={false}
+          style={styles.activityFilterRow}
+          contentContainerStyle={styles.activityFilterContent}
+        >
           {ACTIVITY_FILTERS.map((f) => {
             const selected = activityFilter === f.key;
             return (
@@ -245,13 +271,14 @@ export function ActivityTabScreen({
         ) : null}
 
         {(() => {
-          const filtered = mockActivityFeed.filter((item) => {
+          const filtered = activityItems.filter((item) => {
             const s = activitySearch.trim().toLowerCase();
             if (s && ![item.title, item.subtitle].some((t) => t.toLowerCase().includes(s))) return false;
-            if (activityFilter === 'today') return item.daysAgo === 0;
-            if (activityFilter === 'yesterday') return item.daysAgo === 1;
-            if (activityFilter === '7days') return item.daysAgo <= 6;
-            if (activityFilter === 'month') return item.daysAgo <= 30;
+            const d = daysAgoForActivityItem(item);
+            if (activityFilter === 'today') return d === 0;
+            if (activityFilter === 'yesterday') return d === 1;
+            if (activityFilter === '7days') return d <= 6;
+            if (activityFilter === 'month') return d <= 30;
             return true;
           });
           if (filtered.length === 0) {
@@ -260,12 +287,13 @@ export function ActivityTabScreen({
           const nodes: JSX.Element[] = [];
           let lastGroup = '';
           filtered.forEach((item) => {
+            const d = daysAgoForActivityItem(item);
             const group =
-              item.daysAgo === 0
+              d === 0
                 ? 'Today'
-                : item.daysAgo === 1
+                : d === 1
                   ? 'Yesterday'
-                  : item.daysAgo <= 6
+                  : d <= 6
                     ? 'Earlier This Week'
                     : 'Last Month';
             if (group !== lastGroup) {

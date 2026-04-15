@@ -233,6 +233,7 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
               strokeWidth={9}
               lineCap="round"
               lineJoin="round"
+              geodesic={false}
             />
             <Polyline
               coordinates={trip.routeCoords}
@@ -240,6 +241,7 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
               strokeWidth={6}
               lineCap="round"
               lineJoin="round"
+              geodesic={false}
             />
           </>
         ) : null}

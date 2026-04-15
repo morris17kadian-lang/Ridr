@@ -5,10 +5,39 @@ export type ActivityItem = {
   subtitle: string;
   time: string;
   daysAgo: number;
+  /** ISO timestamp from API — used with filters when present */
+  occurredAt?: string;
   icon: string;
   emoji?: string;
-  iconBg: string;
+  iconBg?: string;
   rideData?: { id: string; from: string; to: string; date: string; price: string; driver: string; rating: number };
+};
+
+/** Ride detail sheet row (activity history / API `rideData`). */
+export type RideDetailRow = {
+  id: string;
+  from: string;
+  to: string;
+  date: string;
+  price: string;
+  driver: string;
+  rating: number;
+};
+
+/** Favourites tab — saved place row (API or mock). */
+export type FavouritePlaceRow = {
+  id: string;
+  title: string;
+  subtitle: string;
+  /** Ionicons `name` */
+  icon: string;
+};
+
+export type FrequentRouteRow = {
+  id: string;
+  from: string;
+  to: string;
+  count: number;
 };
 
 export const ACTIVITY_FILTERS = [
@@ -35,8 +64,27 @@ export const mockActivityFeed: ActivityItem[] = [
   { id: 'a13', type: 'ride', title: 'Portmore → Liguanea', subtitle: 'Marcus W. · $9.50', time: 'Mar 28, 6:15 PM', daysAgo: 12, icon: 'car', iconBg: '#4a90e2', rideData: { id: 'r6', from: 'Portmore', to: 'Liguanea', date: 'Mar 28, 6:15 PM', price: '$9.50', driver: 'Marcus W.', rating: 5 } },
 ];
 
-export const mockFavouritePlaces = [
-  { id: 'f1', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' as const },
-  { id: 'f2', title: 'Sovereign Centre', subtitle: 'Hope Road, Kingston', icon: 'storefront' as const },
-  { id: 'f3', title: 'University of the West Indies', subtitle: 'Mona, Kingston', icon: 'business' as const },
+export const mockFavouritePlaces: FavouritePlaceRow[] = [
+  { id: 'f1', title: 'Norman Manley Airport', subtitle: 'Palisadoes, Kingston', icon: 'airplane' },
+  { id: 'f2', title: 'Sovereign Centre', subtitle: 'Hope Road, Kingston', icon: 'storefront' },
+  { id: 'f3', title: 'University of the West Indies', subtitle: 'Mona, Kingston', icon: 'business' },
 ];
+
+export const mockFrequentRoutes: FrequentRouteRow[] = [
+  { id: 'mock-fr-1', from: 'Half-Way Tree', to: 'Norman Manley Airport', count: 6 },
+  { id: 'mock-fr-2', from: 'New Kingston', to: 'Portmore Mall', count: 3 },
+];
+
+/** Calendar day difference from now (Jamaica-friendly grouping for activity filters). */
+export function daysAgoForActivityItem(item: ActivityItem): number {
+  if (item.occurredAt) {
+    const d = new Date(item.occurredAt);
+    if (!Number.isNaN(d.getTime())) {
+      const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const today = new Date();
+      const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+      return Math.max(0, Math.round((startToday - start) / 86400000));
+    }
+  }
+  return item.daysAgo;
+}

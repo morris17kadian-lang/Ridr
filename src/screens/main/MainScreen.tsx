@@ -96,14 +96,24 @@ import {
   postFareEstimate,
 } from '../../api/rides';
 import { buildActiveTripFromCreateResponse, mergePollRideRequest } from '../../api/mapRideRequest';
-
-const mockRideHistory = [
-  { id: 'r1', from: 'Half-Way Tree', to: 'Norman Manley Airport', date: 'Today, 9:14 AM', price: '$12.40', driver: 'Marcus W.', rating: 5 },
-  { id: 'r2', from: 'New Kingston', to: 'Portmore Mall', date: 'Yesterday, 3:45 PM', price: '$8.20', driver: 'Diana R.', rating: 4 },
-  { id: 'r3', from: 'Liguanea', to: 'Half-Way Tree', date: 'Apr 7, 11:30 AM', price: '$5.10', driver: 'Trevor A.', rating: 5 },
-  { id: 'r4', from: 'Downtown Kingston', to: 'New Kingston', date: 'Apr 6, 8:00 AM', price: '$6.80', driver: 'Sandra M.', rating: 4 },
-  { id: 'r5', from: 'Constant Spring', to: 'Liguanea', date: 'Apr 5, 7:20 PM', price: '$4.90', driver: 'Devon P.', rating: 5 },
-];
+import {
+  apiActivityToActivityItem,
+  canFetchAuthenticatedApi,
+  getActivityFeed,
+  getFavourites,
+  isDemoRiderSession,
+  mapApiFrequentRoutesToRows,
+  mapApiSavedPlacesToFavouriteRows,
+} from '../../api/activityFavourites';
+import {
+  mockActivityFeed,
+  mockFavouritePlaces,
+  mockFrequentRoutes,
+  type ActivityItem,
+  type FavouritePlaceRow,
+  type FrequentRouteRow,
+  type RideDetailRow,
+} from './data/mainTabData';
 
 const mockTopDrivers = [
   { id: 'd1', name: 'Marcus Williams', trips: 14, rating: 4.9, initials: 'MW', color: '#4a90e2' },
@@ -562,7 +572,10 @@ export default function MainScreen() {
   const [activityFilter, setActivityFilter] = useState<'all' | 'today' | 'yesterday' | '7days' | 'month'>('all');
   const [favSearch, setFavSearch] = useState('');
   const [favSearchOpen, setFavSearchOpen] = useState(false);
-  const [selectedRideDetail, setSelectedRideDetail] = useState<typeof mockRideHistory[0] | null>(null);
+  const [activityFeedItems, setActivityFeedItems] = useState<ActivityItem[]>(mockActivityFeed);
+  const [favouritePlacesRows, setFavouritePlacesRows] = useState<FavouritePlaceRow[]>(mockFavouritePlaces);
+  const [frequentRoutesRows, setFrequentRoutesRows] = useState<FrequentRouteRow[]>(mockFrequentRoutes);
+  const [selectedRideDetail, setSelectedRideDetail] = useState<RideDetailRow | null>(null);
   const [screen, setScreen] = useState<MainStackSubScreen>('home');
   const [sheetMinimized, setSheetMinimized] = useState(false);
   /** Long-press on map → choose whether to fill From or To. */
@@ -1359,10 +1372,43 @@ export default function MainScreen() {
     void AsyncStorage.removeItem(ACTIVE_TRIP_STORAGE_KEY);
   }, [activeTrip, nowMs, screen]);
 
+  const loadActivityFavourites = useCallback(async () => {
+    if (!canFetchAuthenticatedApi()) {
+      setActivityFeedItems(mockActivityFeed);
+      setFavouritePlacesRows(mockFavouritePlaces);
+      setFrequentRoutesRows(mockFrequentRoutes);
+      return;
+    }
+    if (await isDemoRiderSession()) {
+      setActivityFeedItems(mockActivityFeed);
+      setFavouritePlacesRows(mockFavouritePlaces);
+      setFrequentRoutesRows(mockFrequentRoutes);
+      return;
+    }
+    try {
+      const [act, fav] = await Promise.all([
+        getActivityFeed({ limit: 50 }),
+        getFavourites({ routeLimit: 10 }),
+      ]);
+      setActivityFeedItems(act.items.map(apiActivityToActivityItem));
+      setFavouritePlacesRows(mapApiSavedPlacesToFavouriteRows(fav.savedPlaces));
+      setFrequentRoutesRows(mapApiFrequentRoutesToRows(fav.frequentRoutes));
+    } catch {
+      setActivityFeedItems(mockActivityFeed);
+      setFavouritePlacesRows(mockFavouritePlaces);
+      setFrequentRoutesRows(mockFrequentRoutes);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadActivityFavourites();
+  }, [loadActivityFavourites, profileCacheNonce, user?.uid]);
+
   const onRefreshMain = useCallback(() => {
     setRefreshingMain(true);
     void (async () => {
       try {
+        await loadActivityFavourites();
         const [tripRaw, bookedRaw] = await Promise.all([
           AsyncStorage.getItem(ACTIVE_TRIP_STORAGE_KEY),
           AsyncStorage.getItem(BOOKED_RIDES_STORAGE_KEY),
@@ -1393,10 +1439,10 @@ export default function MainScreen() {
       } catch {
         // no-op refresh fallback
       } finally {
-        setTimeout(() => setRefreshingMain(false), 500);
+        setRefreshingMain(false);
       }
     })();
-  }, []);
+  }, [loadActivityFavourites]);
 
   const saveAddress = async () => {
     if (!addressModal) return;
@@ -1859,6 +1905,7 @@ export default function MainScreen() {
         return next;
       });
       void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(nextTrip));
+      setProfileCacheNonce((n) => n + 1);
       setFindingDriverVisible(false);
       setFindingDriverPhase('searching');
       setBookingFor('self');
@@ -1996,6 +2043,8 @@ export default function MainScreen() {
     if (trip.status === 'completed' || trip.status === 'cancelled') {
       setActiveTrip(null);
       void AsyncStorage.removeItem(ACTIVE_TRIP_STORAGE_KEY);
+      // Refetch activity feed, favourites, and profile so lists match the server after cancel/complete.
+      setProfileCacheNonce((n) => n + 1);
     } else {
       setActiveTrip(trip);
       void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(trip));
@@ -2125,6 +2174,12 @@ export default function MainScreen() {
         setActiveTrip((prev) => {
           if (!prev || prev.serverRideRequestId !== id) return prev;
           const merged = mergePollRideRequest(prev, rideRequest);
+          if (merged.status === 'completed' || merged.status === 'cancelled') {
+            queueMicrotask(() => {
+              persistTripRecord(merged);
+            });
+            return merged;
+          }
           void AsyncStorage.setItem(ACTIVE_TRIP_STORAGE_KEY, JSON.stringify(merged));
           return merged;
         });
@@ -2149,20 +2204,23 @@ export default function MainScreen() {
       return;
     }
 
+    let stopped = false;
     let raf = 0;
     const startedAt = Date.now();
     const durationMs = 6000;
 
     const tick = () => {
+      if (stopped) return;
       const elapsed = (Date.now() - startedAt) % durationMs;
       const progress = elapsed / durationMs;
       setRouteAnimatorPoint(interpolateRoutePoint(roadRouteCoords, progress));
       raf = requestAnimationFrame(tick);
     };
 
-    tick();
+    raf = requestAnimationFrame(tick);
     return () => {
-      if (raf) cancelAnimationFrame(raf);
+      stopped = true;
+      cancelAnimationFrame(raf);
     };
   }, [hasRoute, roadRouteCoords]);
 
@@ -2949,6 +3007,7 @@ export default function MainScreen() {
                 strokeWidth={9}
                 lineCap="round"
                 lineJoin="round"
+                geodesic={false}
               />
               <Polyline
                 coordinates={roadRouteCoords}
@@ -2956,6 +3015,7 @@ export default function MainScreen() {
                 strokeWidth={6}
                 lineCap="round"
                 lineJoin="round"
+                geodesic={false}
               />
               <Marker coordinate={pickupCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
                 <View style={mapMarkerStyles.pickup} />
@@ -3599,8 +3659,23 @@ export default function MainScreen() {
           setActivityFilter={setActivityFilter}
           onSelectRideDetail={(ride) => {
             hapticLight();
-            setSelectedRideDetail(ride);
+            const date =
+              /\d{4}-\d{2}-\d{2}T/.test(ride.date)
+                ? new Intl.DateTimeFormat('en-JM', { dateStyle: 'medium', timeStyle: 'short' }).format(
+                    new Date(ride.date)
+                  )
+                : ride.date;
+            setSelectedRideDetail({
+              id: ride.id,
+              from: ride.from,
+              to: ride.to,
+              date,
+              price: ride.price,
+              driver: ride.driver,
+              rating: ride.rating ?? 0,
+            });
           }}
+          activityItems={activityFeedItems}
           presentRide={presentRide}
           onOpenPresentRide={() => setScreen('activeRide')}
           recentBookedRides={bookedRides}
@@ -3631,6 +3706,8 @@ export default function MainScreen() {
             hapticMedium();
             setFavBookModal({ type: 'route', from, to });
           }}
+          favouritePlaces={favouritePlacesRows}
+          frequentRoutes={frequentRoutesRows}
         />
       ) : null}
 
