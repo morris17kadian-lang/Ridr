@@ -28,8 +28,9 @@ import { useAppTheme, type ThemeOverride } from '../../theme/ThemeProvider';
 import { KSA_MAP_CENTER, type LatLng } from '../main/locationResolve';
 import type { MainScreenUi } from '../main/mainScreenUi';
 import { ProfileEditScreen } from '../main/profile/screens/ProfileEditScreen';
-import { ProfileScreen } from '../main/profile/screens/ProfileScreen';
 import { DEFAULT_PROFILE_CARDS, type ProfileCard } from '../main/profile/profileTypes';
+import { AddPayoutModal, type PayoutAccount } from './AddPayoutModal';
+import { DriverProfileScreen } from './DriverProfileScreen';
 import type { TripStatus } from '../main/ride/activeTripTypes';
 import { SettingsAppearanceScreen } from '../main/settings/screens/SettingsAppearanceScreen';
 import { SettingsHelpScreen } from '../main/settings/screens/SettingsHelpScreen';
@@ -48,6 +49,8 @@ type DriverSubScreen =
   | 'profile'
   | 'profileEdit'
   | 'notifications'
+  | 'cashOut'
+  | 'allTrips'
   | 'settingsPassword'
   | 'settingsPayment'
   | 'settingsNotifications'
@@ -70,7 +73,7 @@ type IncomingRequest = {
   paymentLabel: 'Card' | 'Cash';
 };
 
-type DriverTripStatus = Extract<TripStatus, 'matched' | 'arrived' | 'completed' | 'cancelled'>;
+type DriverTripStatus = Extract<TripStatus, 'matched' | 'arrived' | 'in_trip' | 'completed' | 'cancelled'>;
 
 type DriverTrip = IncomingRequest & {
   status: DriverTripStatus;
@@ -85,6 +88,7 @@ type DriverTrip = IncomingRequest & {
 const DRIVER_PROGRESS_STEPS: Array<{ key: DriverTripStatus; label: string }> = [
   { key: 'matched', label: 'Accepted' },
   { key: 'arrived', label: 'Arrived' },
+  { key: 'in_trip', label: 'En Route' },
   { key: 'completed', label: 'Completed' },
 ];
 
@@ -134,6 +138,16 @@ const completedTripsSeed = [
   { id: 'done-2', riderName: 'Kevin T.', route: 'Half-Way Tree to Portmore', fare: 'J$2,980', when: 'Today, 7:35 AM' },
   { id: 'done-3', riderName: 'Alana P.', route: 'Liguanea to Downtown Kingston', fare: 'J$1,880', when: 'Yesterday, 6:20 PM' },
 ];
+type CompletedTrip = (typeof completedTripsSeed)[number];
+
+function splitTripRoute(route: string): { from: string; to: string | null } {
+  const parts = route.split(' to ');
+  if (parts.length >= 2) {
+    const [from, ...rest] = parts;
+    return { from: from.trim(), to: rest.join(' to ').trim() };
+  }
+  return { from: route, to: null };
+}
 
 function getTripBadge(status: DriverTripStatus): { label: string; bg: string; text: string } {
   switch (status) {
@@ -141,6 +155,8 @@ function getTripBadge(status: DriverTripStatus): { label: string; bg: string; te
       return { label: 'Accepted', bg: '#fef3c7', text: '#92400e' };
     case 'arrived':
       return { label: 'At pickup', bg: '#ede9fe', text: '#6d28d9' };
+    case 'in_trip':
+      return { label: 'En Route', bg: '#dbeafe', text: '#1e40af' };
     case 'completed':
       return { label: 'Completed', bg: '#dcfce7', text: '#166534' };
     case 'cancelled':
@@ -154,6 +170,8 @@ function getPrimaryAction(status: DriverTripStatus): { label: string; icon: keyo
       return { label: 'Mark arrived', icon: 'location-outline' };
     case 'arrived':
       return { label: 'Start trip', icon: 'play-outline' };
+    case 'in_trip':
+      return { label: 'Complete trip', icon: 'checkmark-circle-outline' };
     default:
       return null;
   }
@@ -162,9 +180,11 @@ function getPrimaryAction(status: DriverTripStatus): { label: string; icon: keyo
 function getStatusSummary(status: DriverTripStatus, paymentLabel: 'Card' | 'Cash'): string {
   switch (status) {
     case 'matched':
-      return 'Trip accepted. Head to the pickup point.';
+      return 'Trip accepted. Pickup point confirmed.';
     case 'arrived':
       return 'You are at pickup. Start the trip when the rider is onboard.';
+    case 'in_trip':
+      return 'En route to drop off.';
     case 'completed':
       return 'Trip is complete and ready to be archived.';
     case 'cancelled':
@@ -194,9 +214,11 @@ function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: 
 
   switch (trip.status) {
     case 'matched':
-      return { title: 'Ride accepted. Head to pickup', pill: `${formatMinSec(etaCountdownSec)} Mins`, icon: 'checkmark-circle-outline' };
+      return { title: 'Ride accepted. Pickup confirmed', pill: `${formatMinSec(etaCountdownSec)} Mins`, icon: 'checkmark-circle-outline' };
     case 'arrived':
       return { title: 'You have arrived at pickup', pill: 'Arrived', icon: 'location-outline' };
+    case 'in_trip':
+      return { title: 'En route to drop off', pill: 'In Trip', icon: 'navigate-outline' };
     case 'completed':
       return { title: 'Trip completed', pill: 'Done', icon: 'checkmark-done-outline' };
     case 'cancelled':
@@ -309,10 +331,14 @@ export default function DriverHomeScreen() {
   const { user, setAppMode, signOut } = useAuth();
   const [activeTab, setActiveTab] = useState<DriverTab>('home');
   const [subScreen, setSubScreen] = useState<DriverSubScreen>(null);
-  const [isOnline, setIsOnline] = useState(true);
+  const [isOnline, setIsOnline] = useState(false);
   const [surgeMultiplier] = useState(2.1); // reserved for future use
   type EarningsModal = null | 'earnings' | 'trips' | 'rating';
   const [earningsModal, setEarningsModal] = useState<EarningsModal>(null);
+  const [selectedTripDetail, setSelectedTripDetail] = useState<CompletedTrip | null>(null);
+  const [completedTrips, setCompletedTrips] = useState<CompletedTrip[]>(completedTripsSeed);
+  const [availableCashOutAmount, setAvailableCashOutAmount] = useState(12430);
+  const [cashOutAmountInput, setCashOutAmountInput] = useState<string>(() => (12430).toLocaleString());
   const [incomingRequests, setIncomingRequests] = useState(incomingRequestsSeed);
   const [requestModalVisible, setRequestModalVisible] = useState(false);
   const [currentTrip, setCurrentTrip] = useState<DriverTrip | null>(null);
@@ -321,8 +347,14 @@ export default function DriverHomeScreen() {
   const [tripPinModalVisible, setTripPinModalVisible] = useState(false);
   const [tripPinInput, setTripPinInput] = useState('');
   const [tripPinError, setTripPinError] = useState('');
+  const mainMapRef = useRef<MapView | null>(null);
+  const enrouteOverlayAnim = useRef(new Animated.Value(0)).current;
+  const [enrouteNowMs, setEnrouteNowMs] = useState(() => Date.now());
+  const [enrouteExpanded, setEnrouteExpanded] = useState(true);
+  const enrouteEntranceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestModalPulse = useRef(new Animated.Value(1)).current;
   const requestModalPan = useRef(new Animated.ValueXY()).current;
+  const allTripsSlideAnim = useRef(new Animated.Value(800)).current;
   const requestSoundRef = useRef<Audio.Sound | null>(null);
   const pinInputRef = useRef<TextInput>(null);
   const driverSheetPan = useRef(new Animated.Value(0)).current;
@@ -344,6 +376,8 @@ export default function DriverHomeScreen() {
   const [cards, setCards] = useState<ProfileCard[]>(DEFAULT_PROFILE_CARDS);
   const [defaultCard, setDefaultCard] = useState<string | null>(DEFAULT_PROFILE_CARDS[0]?.id ?? null);
   const [addCardVisible, setAddCardVisible] = useState(false);
+  const [payoutAccounts, setPayoutAccounts] = useState<PayoutAccount[]>([]);
+  const [addPayoutVisible, setAddPayoutVisible] = useState(false);
   const [newCardNumber, setNewCardNumber] = useState('');
   const [newCardName, setNewCardName] = useState('');
   const [newCardExpiry, setNewCardExpiry] = useState('');
@@ -411,6 +445,12 @@ export default function DriverHomeScreen() {
     }),
     [colors]
   );
+
+  const formatJmd = (value: number) => `J$${value.toLocaleString()}`;
+  const parseJmd = (value: string) => {
+    const n = Number.parseInt(value.replace(/[^0-9]/g, ''), 10);
+    return Number.isFinite(n) ? n : 0;
+  };
 
   const settingsUi = useMemo<TabUi>(
     () => ({
@@ -486,6 +526,105 @@ export default function DriverHomeScreen() {
   const mapPickup = currentTrip?.pickupCoordinate ?? incomingRequests[0]?.pickupCoordinate ?? KSA_MAP_CENTER;
   const mapDropoff = currentTrip?.dropoffCoordinate ?? incomingRequests[0]?.dropoffCoordinate ?? KSA_MAP_CENTER;
   const driverMarker = currentTrip?.pickupCoordinate ?? { latitude: KSA_MAP_CENTER.latitude + 0.008, longitude: KSA_MAP_CENTER.longitude - 0.006 };
+  const enrouteMapHeight = enrouteOverlayAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [410, Dimensions.get('window').height],
+  });
+
+  const getEnrouteTotalSec = (trip: DriverTrip) => {
+    const kmMatch = trip.distance.match(/([0-9]+(?:\.[0-9]+)?)/);
+    const km = kmMatch ? Number(kmMatch[1]) : 8;
+    const avgKmh = 28;
+    const minutes = (km / avgKmh) * 60;
+    return Math.max(240, Math.min(2400, Math.round(minutes * 60)));
+  };
+
+  useEffect(() => {
+    if (!currentTrip || currentTrip.status !== 'in_trip') {
+      if (enrouteEntranceTimeoutRef.current) {
+        clearTimeout(enrouteEntranceTimeoutRef.current);
+        enrouteEntranceTimeoutRef.current = null;
+      }
+      Animated.timing(enrouteOverlayAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: false,
+      }).start();
+      setEnrouteExpanded(true);
+      return;
+    }
+
+    setEnrouteExpanded(true);
+    enrouteOverlayAnim.setValue(0);
+
+    const rafId = requestAnimationFrame(() => {
+      try {
+        mainMapRef.current?.fitToCoordinates([
+          currentTrip.pickupCoordinate,
+          currentTrip.dropoffCoordinate,
+        ], {
+          edgePadding: {
+            top: Platform.OS === 'ios' ? 160 : 140,
+            right: 52,
+            bottom: 140,
+            left: 52,
+          },
+          animated: true,
+        });
+      } catch {
+        // ignore
+      }
+    });
+
+    if (enrouteEntranceTimeoutRef.current) {
+      clearTimeout(enrouteEntranceTimeoutRef.current);
+      enrouteEntranceTimeoutRef.current = null;
+    }
+
+    enrouteEntranceTimeoutRef.current = setTimeout(() => {
+      Animated.timing(enrouteOverlayAnim, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: false,
+      }).start();
+    }, 260);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (enrouteEntranceTimeoutRef.current) {
+        clearTimeout(enrouteEntranceTimeoutRef.current);
+        enrouteEntranceTimeoutRef.current = null;
+      }
+    };
+  }, [currentTrip?.status]);
+
+  const toggleEnrouteExpanded = () => {
+    if (!currentTrip || currentTrip.status !== 'in_trip') return;
+    if (enrouteEntranceTimeoutRef.current) {
+      clearTimeout(enrouteEntranceTimeoutRef.current);
+      enrouteEntranceTimeoutRef.current = null;
+    }
+    const next = !enrouteExpanded;
+    setEnrouteExpanded(next);
+    Animated.timing(enrouteOverlayAnim, {
+      toValue: next ? 1 : 0,
+      duration: 240,
+      useNativeDriver: false,
+    }).start();
+  };
+
+  useEffect(() => {
+    if (!currentTrip || currentTrip.status !== 'in_trip') return;
+    const id = setInterval(() => setEnrouteNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [currentTrip?.status]);
+
+  const enrouteRemainingSec = (() => {
+    if (!currentTrip || currentTrip.status !== 'in_trip') return 0;
+    const total = getEnrouteTotalSec(currentTrip);
+    const elapsed = Math.max(0, Math.floor((enrouteNowMs - currentTrip.startedAtMs) / 1000));
+    return Math.max(0, total - elapsed);
+  })();
 
   const minimizeDriverSheet = () => {
     driverSheetPan.setValue(0);
@@ -741,6 +880,56 @@ export default function DriverHomeScreen() {
       return;
     }
 
+    if (currentTrip.status === 'in_trip') {
+      const fareAmount = parseJmd(currentTrip.fare);
+      const route = `${currentTrip.pickup} to ${currentTrip.dropoff}`;
+      const now = new Date();
+      const time = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const when = `Today, ${time}`;
+
+      const completeAndArchive = () => {
+        hapticSuccess();
+        setCompletedTrips((prev) => [
+          {
+            id: `done-${Date.now()}`,
+            riderName: currentTrip.riderName,
+            route,
+            fare: currentTrip.fare,
+            when,
+          },
+          ...prev,
+        ]);
+        setAvailableCashOutAmount((prev) => prev + fareAmount);
+        setCurrentTrip(null);
+        setCurrentTripExpanded(true);
+        Alert.alert('Trip completed', 'Trip added to your earnings and trips. You’re ready for more trips.');
+      };
+
+      if (currentTrip.paymentLabel === 'Cash') {
+        hapticMedium();
+        Alert.alert(
+          'Confirm cash payment',
+          `Has ${currentTrip.riderName} paid ${formatJmd(fareAmount)} in cash?`,
+          [
+            { text: 'Not yet', style: 'cancel' },
+            { text: 'Yes, paid', onPress: completeAndArchive },
+          ]
+        );
+        return;
+      }
+
+      hapticMedium();
+      Alert.alert(
+        'Complete trip',
+        `Complete this trip for ${currentTrip.riderName}?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Complete', onPress: completeAndArchive },
+        ]
+      );
+      return;
+    }
+
     hapticMedium();
     setCurrentTrip((prev) => {
       if (!prev) return prev;
@@ -768,7 +957,7 @@ export default function DriverHomeScreen() {
     setTripPinModalVisible(false);
     setTripPinInput('');
     setTripPinError('');
-    setCurrentTrip((prev) => (prev ? { ...prev, status: 'completed', completedAtMs: Date.now() } : prev));
+    setCurrentTrip((prev) => (prev ? { ...prev, status: 'in_trip', startedAtMs: Date.now() } : prev));
   };
 
   const cancelCurrentTrip = () => {
@@ -898,6 +1087,205 @@ export default function DriverHomeScreen() {
 
   const renderSubScreen = () => {
     switch (subScreen) {
+      case 'cashOut': {
+        const parsedAmount = Number.parseInt(cashOutAmountInput.replace(/[^0-9]/g, ''), 10);
+        const amountToCashOut = Number.isFinite(parsedAmount) ? parsedAmount : 0;
+        const clampedAmountToCashOut = Math.min(Math.max(amountToCashOut, 0), availableCashOutAmount);
+        const cashOutFee = Math.round(clampedAmountToCashOut * 0.01);
+        const cashOutNet = clampedAmountToCashOut - cashOutFee;
+        const cashOutAmountInvalid = amountToCashOut > availableCashOutAmount;
+        const fmtJmd = (value: number) => `J$${value.toLocaleString()}`;
+        const fullName = `${profileFirstName} ${profileLastName}`.trim();
+        const staffCodeRaw = (user?.staffCode ?? profileUsername ?? '').trim();
+        const staffCodeMasked = (() => {
+          if (!staffCodeRaw) return '';
+          const keepStart = 1;
+          const keepEnd = staffCodeRaw.length <= 4 ? 1 : 2;
+          const middleLen = Math.max(0, staffCodeRaw.length - keepStart - keepEnd);
+          const stars = middleLen > 0 ? '*'.repeat(middleLen) : '';
+          return `${staffCodeRaw.slice(0, keepStart)}${stars}${staffCodeRaw.slice(staffCodeRaw.length - keepEnd)}`;
+        })();
+
+        return (
+          <View style={[styles.editProfileRoot, { backgroundColor: riderUi.screenBg }]}>
+            <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+            <View style={[styles.editProfileHeader, { backgroundColor: riderUi.screenBg, borderBottomColor: riderUi.divider }]}>
+              <Pressable style={styles.editProfileHeaderSide} onPress={() => setSubScreen(null)} hitSlop={8}>
+                <Ionicons name="arrow-back" size={24} color={riderUi.text} />
+              </Pressable>
+              <Text style={[styles.editProfileHeaderTitle, { color: riderUi.text }]}>Cash Out</Text>
+              <View style={styles.editProfileHeaderSide} />
+            </View>
+            <ScrollView
+              style={styles.editProfileScroll}
+              contentContainerStyle={styles.profileViewScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Available */}
+              <BlurView
+                intensity={isDark ? 22 : 32}
+                tint={isDark ? 'dark' : 'light'}
+                style={[
+                  styles.cashOutAvailableCard,
+                  {
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.55)',
+                    borderColor: isDark ? 'rgba(255,208,0,0.55)' : 'rgba(255,208,0,0.65)',
+                  },
+                ]}
+              >
+                <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                  <View style={[styles.cashOutFrostRadial, styles.cashOutFrostRadialTopLeft, { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.45)' }]} />
+                  <View style={[styles.cashOutFrostRadial, styles.cashOutFrostRadialBottomRight, { backgroundColor: isDark ? 'rgba(255,208,0,0.18)' : 'rgba(255,208,0,0.22)' }]} />
+                  <View style={[styles.cashOutFrostRadial, styles.cashOutFrostRadialCenter, { backgroundColor: isDark ? 'rgba(255,208,0,0.08)' : 'rgba(255,208,0,0.10)' }]} />
+                </View>
+                <View style={styles.cashOutAvailableHeaderRow}>
+                  <Text style={[styles.cashOutAvailableName, { color: isDark ? 'rgba(255,255,255,0.96)' : '#171717' }]} numberOfLines={1}>
+                    {fullName || 'Driver'}
+                  </Text>
+                  {staffCodeMasked ? (
+                    <Text
+                      style={[styles.cashOutAvailableStaffCode, { color: isDark ? 'rgba(255,255,255,0.88)' : '#171717' }]}
+                      numberOfLines={1}
+                    >
+                      • {staffCodeMasked}
+                    </Text>
+                  ) : null}
+                </View>
+                <Text style={[styles.cashOutAvailableLabel, { color: isDark ? 'rgba(255,255,255,0.78)' : 'rgba(23,23,23,0.72)' }]}>Available to cash out</Text>
+                <Text style={[styles.cashOutAvailableValue, { color: isDark ? 'rgba(255,255,255,0.96)' : '#171717' }]}>
+                  {fmtJmd(availableCashOutAmount)}
+                </Text>
+              </BlurView>
+
+              {/* Amount input */}
+              <View style={[styles.profileViewSectionHeadingWrap, { marginTop: 24 }]}> 
+                <Text style={[styles.profileViewSectionTitle, { color: riderUi.textMuted }]}>Amount</Text>
+              </View>
+              <View style={[styles.profileViewCard, { backgroundColor: riderUi.cardBg, borderColor: riderUi.divider }]}>
+                <View style={[styles.cashOutBreakdownWrap, { paddingTop: 4 }]}> 
+                  <View style={styles.cashOutBreakdownRow}>
+                    <Text style={[styles.cashOutBreakdownLabel, { color: riderUi.textMuted }]}>Cash out amount</Text>
+                    <Text style={[styles.cashOutBreakdownValue, { color: riderUi.text }]}>{fmtJmd(clampedAmountToCashOut)}</Text>
+                  </View>
+                  <View style={styles.cashOutBreakdownRow}>
+                    <Text style={[styles.cashOutBreakdownLabel, { color: riderUi.textMuted }]}>App fee (1%)</Text>
+                    <Text style={[styles.cashOutBreakdownValue, { color: riderUi.textMuted }]}>−{fmtJmd(cashOutFee)}</Text>
+                  </View>
+                  <View style={[styles.profileViewDivider, { backgroundColor: riderUi.divider, marginTop: 10, marginBottom: 10 }]} />
+                  <View style={styles.cashOutAmountRow}>
+                    <Text style={[styles.cashOutAmountRowLabel, { color: riderUi.textMuted }]}>How much do you want to cash out?</Text>
+                    <View style={[styles.cashOutInlineInputWrap, { borderColor: riderUi.divider, backgroundColor: riderUi.screenBg }]}>
+                      <Text style={[styles.cashOutAmountCurrency, { color: riderUi.textMuted }]}>J$</Text>
+                      <TextInput
+                        value={cashOutAmountInput}
+                        onChangeText={(text) => {
+                          const digits = text.replace(/[^0-9]/g, '');
+                          if (!digits) {
+                            setCashOutAmountInput('');
+                            return;
+                          }
+                          const n = Number.parseInt(digits, 10);
+                          setCashOutAmountInput(Number.isFinite(n) ? n.toLocaleString() : '');
+                        }}
+                        placeholder="0"
+                        placeholderTextColor={riderUi.textMuted}
+                        keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                        style={[styles.cashOutInlineAmountInput, { color: riderUi.text }]}
+                        textAlign="right"
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                <View style={[styles.profileViewDivider, { backgroundColor: riderUi.divider, marginTop: 12 }]} />
+                <View style={[styles.cashOutBreakdownRow, { paddingVertical: 14 }]}>
+                  <Text style={[styles.cashOutBreakdownNetLabel, { color: riderUi.text }]}>You receive</Text>
+                  <Text style={[styles.cashOutBreakdownNetValue, { color: '#16a34a' }]}>{fmtJmd(cashOutNet)}</Text>
+                </View>
+                {cashOutAmountInvalid ? (
+                  <Text style={styles.cashOutAmountError}>Amount exceeds available balance.</Text>
+                ) : null}
+              </View>
+
+              {/* Payout methods */}
+              <View style={[styles.profileViewSectionHeadingWrap, { marginTop: 24 }]}>
+                <Text style={[styles.profileViewSectionTitle, { color: riderUi.textMuted }]}>Send to</Text>
+              </View>
+
+              {payoutAccounts.length === 0 ? (
+                <View style={[styles.profileViewCard, { backgroundColor: riderUi.cardBg, borderColor: riderUi.divider }]}>
+                  <Text style={[styles.profileViewValue, { color: riderUi.textMuted, paddingVertical: 14, paddingHorizontal: 4, textAlign: 'left' }]}>
+                    No payout method linked. Go to Profile → Payout methods to add one.
+                  </Text>
+                </View>
+              ) : (
+                <View style={[styles.profileViewCard, { backgroundColor: riderUi.cardBg, borderColor: riderUi.divider }]}>
+                  {payoutAccounts.map((account, i) => (
+                    <View key={account.id}>
+                      <Pressable
+                        style={styles.profilePaymentRow}
+                        onPress={() => {
+                          hapticMedium();
+
+                          if (clampedAmountToCashOut <= 0) {
+                            Alert.alert('Enter amount', 'Please enter an amount greater than J$0.');
+                            return;
+                          }
+                          if (amountToCashOut > availableCashOutAmount) {
+                            Alert.alert('Amount too high', `You only have ${fmtJmd(availableCashOutAmount)} available to cash out.`);
+                            return;
+                          }
+
+                          Alert.alert(
+                            'Confirm cash out',
+                            `Send ${fmtJmd(cashOutNet)} to ${account.label}?\n\nApp fee (1%): −${fmtJmd(cashOutFee)}\nThis action cannot be undone.`,
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Cash out',
+                                onPress: () => {
+                                  hapticSuccess();
+                                  setSubScreen(null);
+                                  Alert.alert('Cash out requested', `${fmtJmd(cashOutNet)} will be sent to ${account.label} within 1–2 business days.`);
+                                },
+                              },
+                            ]
+                          );
+                        }}
+                      >
+                        <View style={[
+                          styles.profilePaymentCardIcon,
+                          account.type === 'bank'
+                            ? { backgroundColor: '#1a5276' }
+                            : (account.label.toLowerCase().includes('visa') ? styles.profilePaymentVisa : styles.profilePaymentMc),
+                        ]}>
+                          <Text style={styles.profilePaymentCardIconText}>
+                            {account.type === 'bank' ? 'BANK' : (account.label.toLowerCase().includes('visa') ? 'VISA' : 'MC')}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={[styles.profilePaymentLabel, { color: riderUi.text }]} numberOfLines={1}>{account.label}</Text>
+                          <Text style={[styles.profilePaymentSub, { color: riderUi.textMuted }]}>
+                            {account.type === 'bank' ? `Account •••• ${account.last4}` : `•••• ${account.last4}`}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={18} color={riderUi.textMuted} />
+                      </Pressable>
+                      {i < payoutAccounts.length - 1 && (
+                        <View style={[styles.profileViewDivider, { backgroundColor: riderUi.divider }]} />
+                      )}
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <Text style={[styles.cashOutFootnote, { color: riderUi.textMuted }]}>
+                Funds are typically received within 1–2 business days depending on your bank.
+              </Text>
+            </ScrollView>
+          </View>
+        );
+      }
       case 'notifications':
         return (
           <NotificationsScreen
@@ -908,61 +1296,39 @@ export default function DriverHomeScreen() {
         );
       case 'profile':
         return (
-          <View style={{ flex: 1, backgroundColor: riderUi.screenBg }}>
-            <View style={[styles.driverStatsBar, { backgroundColor: ui.hero }]}>
-              <View style={styles.statCard}>
-                <Text style={styles.statValue}>J$12,430</Text>
-                <Text style={styles.statLabel}>Today&apos;s earnings</Text>
-              </View>
-              <View style={[styles.statDivider, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
-              <View style={styles.statCard}>
-                <Text style={styles.statValue}>9</Text>
-                <Text style={styles.statLabel}>Trips today</Text>
-              </View>
-              <View style={[styles.statDivider, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
-              <View style={styles.statCard}>
-                <Text style={styles.statValue}>4.9 ★</Text>
-                <Text style={styles.statLabel}>Rating</Text>
-              </View>
-            </View>
-            <ProfileScreen
-              ui={riderUi}
-              isDark={isDark}
-              onBack={() => setSubScreen(null)}
-              onEdit={() => setSubScreen('profileEdit')}
+          <DriverProfileScreen
+            ui={riderUi}
+            isDark={isDark}
+            onBack={() => setSubScreen(null)}
+            onEdit={() => setSubScreen('profileEdit')}
             userFirstName={profileFirstName}
             userLastName={profileLastName}
             userEmail={profileEmail}
             userPhoneE164={profilePhone || null}
-            cards={cards}
-            defaultCard={defaultCard}
-            selectDefaultCard={setDefaultCard}
-            addCardVisible={addCardVisible}
-            setAddCardVisible={setAddCardVisible}
-            newCardNumber={newCardNumber}
-            setNewCardNumber={setNewCardNumber}
-            newCardName={newCardName}
-            setNewCardName={setNewCardName}
-            newCardExpiry={newCardExpiry}
-            setNewCardExpiry={setNewCardExpiry}
-            newCardCvv={newCardCvv}
-            setNewCardCvv={setNewCardCvv}
-            closeAddCardSheet={closeAddCardSheet}
-            saveNewCard={saveNewCard}
-            onPaymentMethodLongPress={onPaymentMethodLongPress}
-            editExpiryVisible={editExpiryVisible}
-            editExpiryLast4={editExpiryLast4}
-            editExpiryMonth={editExpiryMonth}
-            setEditExpiryMonth={setEditExpiryMonth}
-            editExpiryYear={editExpiryYear}
-            setEditExpiryYear={setEditExpiryYear}
-            closeEditCardExpiry={closeEditCardExpiry}
-            saveEditCardExpiry={saveEditCardExpiry}
+            payoutAccounts={payoutAccounts}
+            addPayoutVisible={addPayoutVisible}
+            setAddPayoutVisible={setAddPayoutVisible}
+            onAddPayoutSave={(account) => {
+              setPayoutAccounts((prev) => [
+                ...prev,
+                { ...account, id: `payout-${Date.now()}` },
+              ]);
+            }}
+            onPayoutLongPress={(account) => {
+              Alert.alert('Remove payout method', `Remove ${account.label}?`, [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Remove',
+                  style: 'destructive',
+                  onPress: () =>
+                    setPayoutAccounts((prev) => prev.filter((a) => a.id !== account.id)),
+                },
+              ]);
+            }}
             onConfirmSignOut={() => {
               void signOut();
             }}
           />
-          </View>
         );
       case 'profileEdit':
         return (
@@ -1093,6 +1459,57 @@ export default function DriverHomeScreen() {
         return <SettingsSupportScreen userEmail={profileEmail} userFirstName={profileFirstName} onBack={() => setSubScreen(null)} />;
       case 'settingsTerms':
         return <SettingsTermsScreen ui={riderUi} isDark={isDark} onBack={() => setSubScreen(null)} />;
+      case 'allTrips':
+        return (
+          <Animated.View
+            style={[
+              styles.editProfileRoot,
+              { backgroundColor: riderUi.screenBg, transform: [{ translateY: allTripsSlideAnim }] },
+            ]}
+          >
+            <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+            <View style={[styles.editProfileHeader, { backgroundColor: riderUi.screenBg, borderBottomColor: riderUi.divider }]}>
+              <Pressable
+                style={styles.editProfileHeaderSide}
+                onPress={() => {
+                  hapticLight();
+                  Animated.timing(allTripsSlideAnim, {
+                    toValue: 800,
+                    duration: 280,
+                    useNativeDriver: true,
+                  }).start(() => setSubScreen(null));
+                }}
+                hitSlop={8}
+              >
+                <Ionicons name="arrow-back" size={24} color={riderUi.text} />
+              </Pressable>
+              <Text style={[styles.editProfileHeaderTitle, { color: riderUi.text }]}>All Trips</Text>
+              <View style={styles.editProfileHeaderSide} />
+            </View>
+            <ScrollView
+              style={styles.editProfileScroll}
+              contentContainerStyle={[styles.profileViewScrollContent, { gap: 12 }]}
+              showsVerticalScrollIndicator={false}
+            >
+              {completedTrips.map((trip) => (
+                <Pressable
+                  key={trip.id}
+                  style={[styles.tripHistoryCard, { borderColor: riderUi.divider, backgroundColor: riderUi.cardBg }]}
+                  onPress={() => {
+                    hapticLight();
+                    setSelectedTripDetail(trip);
+                  }}
+                >
+                  <View style={styles.tripHistoryTopRow}>
+                    <Text style={[styles.tripHistoryRoute, { color: riderUi.text }]}>{trip.route}</Text>
+                    <Text style={[styles.tripHistoryFare, { color: riderUi.text }]}>{trip.fare}</Text>
+                  </View>
+                  <Text style={[styles.tripHistoryMeta, { color: riderUi.textMuted }]}>Rider {trip.riderName} • {trip.when}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </Animated.View>
+        );
       default:
         return null;
     }
@@ -1100,30 +1517,34 @@ export default function DriverHomeScreen() {
 
   const renderHomeTab = () => (
     <>
-      {/* ── Earnings summary pills ── */}
-      <View style={styles.earningsRow}>
-        <Pressable
-          style={[styles.earningsPill, { backgroundColor: '#171717' }]}
-          onPress={() => { hapticLight(); setEarningsModal('rating'); }}
-        >
-          <Text style={styles.earningsPillValueBlack}>4.9 ★</Text>
-          <Text style={styles.earningsPillLabelBlack}>Rating</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.earningsPill, styles.earningsPillCenter, { backgroundColor: '#FFD000' }]}
-          onPress={() => { hapticLight(); setEarningsModal('earnings'); }}
-        >
-          <Text style={styles.earningsPillValueYellow}>J$12,430</Text>
-          <Text style={styles.earningsPillLabelYellow}>Today&apos;s earnings</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.earningsPill, { backgroundColor: '#171717' }]}
-          onPress={() => { hapticLight(); setEarningsModal('trips'); }}
-        >
-          <Text style={styles.earningsPillValueBlack}>9</Text>
-          <Text style={styles.earningsPillLabelBlack}>Trips today</Text>
-        </Pressable>
-      </View>
+      {currentTrip?.status !== 'in_trip' ? (
+        <>
+          {/* ── Earnings summary pills ── */}
+          <View style={styles.earningsRow}>
+            <Pressable
+              style={[styles.earningsPill, { backgroundColor: '#171717' }]}
+              onPress={() => { hapticLight(); setEarningsModal('rating'); }}
+            >
+              <Text style={styles.earningsPillValueBlack}>4.9 ★</Text>
+              <Text style={styles.earningsPillLabelBlack}>Rating</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.earningsPill, styles.earningsPillCenter, { backgroundColor: '#16a34a' }]}
+              onPress={() => { hapticLight(); setEarningsModal('earnings'); }}
+            >
+              <Text style={styles.earningsPillValueYellow}>{formatJmd(availableCashOutAmount)}</Text>
+              <Text style={styles.earningsPillLabelYellow}>Today&apos;s earnings</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.earningsPill, { backgroundColor: '#171717' }]}
+              onPress={() => { hapticLight(); setEarningsModal('trips'); }}
+            >
+              <Text style={styles.earningsPillValueBlack}>9</Text>
+              <Text style={styles.earningsPillLabelBlack}>Trips today</Text>
+            </Pressable>
+          </View>
+        </>
+      ) : null}
 
       {currentTrip ? (
         <View style={styles.currentTripWrap}>
@@ -1161,7 +1582,7 @@ export default function DriverHomeScreen() {
                       Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`);
                     }}
                   >
-                    <Ionicons name="call" size={17} color="#FFD000" />
+                    <Ionicons name="call" size={17} color="#ffffff" />
                   </Pressable>
                   <Pressable
                     style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
@@ -1170,7 +1591,7 @@ export default function DriverHomeScreen() {
                       Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`);
                     }}
                   >
-                    <Ionicons name="chatbubble-ellipses" size={16} color="#FFD000" />
+                    <Ionicons name="chatbubble-ellipses" size={16} color="#ffffff" />
                   </Pressable>
                 </View>
               </View>
@@ -1201,7 +1622,10 @@ export default function DriverHomeScreen() {
                   const isCurrent = currentTrip.status === step.key;
                   const isNext = index === progressIndex + 1;
                   const isCompleted = currentTrip.status === 'completed' || currentTrip.status === 'cancelled';
-                  const canTap = (!isCompleted && isNext) || (isCurrent && step.key === 'arrived');
+                  // in_trip is entered only via PIN modal — not directly tappable from the pill
+                  const canTap =
+                    (!isCompleted && isNext && step.key !== 'in_trip') ||
+                    (isCurrent && step.key === 'arrived');
                   return (
                     <Pressable
                       key={step.key}
@@ -1231,7 +1655,7 @@ export default function DriverHomeScreen() {
                     >
                       <Text style={[styles.tripPhasePillText, {
                         color: isCurrent ? '#171717' : isActive ? '#FFD000' : ui.textMuted,
-                      }]}>
+                      }]} numberOfLines={1}>
                         {step.label}
                       </Text>
                     </Pressable>
@@ -1244,6 +1668,72 @@ export default function DriverHomeScreen() {
         </View>
       ) : null}
 
+      {currentTrip?.status !== 'in_trip' ? (
+        <>
+          {/* ── This week ── */}
+          <View style={styles.homeSectionGap}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: ui.text }]}>This week</Text>
+            </View>
+            <Pressable
+              style={[styles.weeklyCard, { backgroundColor: ui.card, borderColor: ui.border }]}
+              onPress={() => {
+                hapticLight();
+                setEarningsModal('earnings');
+              }}
+            >
+              <View style={styles.weeklyStatRow}>
+                <View style={styles.weeklyStatItem}>
+                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>94%</Text>
+                  <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Acceptance</Text>
+                </View>
+                <View style={[styles.weeklyStatDivider, { backgroundColor: ui.border }]} />
+                <View style={styles.weeklyStatItem}>
+                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>6.2 hrs</Text>
+                  <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Online time</Text>
+                </View>
+                <View style={[styles.weeklyStatDivider, { backgroundColor: ui.border }]} />
+                <View style={styles.weeklyStatItem}>
+                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>J$48,200</Text>
+                  <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Earned</Text>
+                </View>
+              </View>
+            </Pressable>
+          </View>
+
+          {/* ── Recent trips ── */}
+          <View style={styles.homeSectionGap}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: ui.text }]}>Recent trips</Text>
+              <Pressable
+                onPress={() => {
+                  hapticLight();
+                  allTripsSlideAnim.setValue(800);
+                  setSubScreen('allTrips');
+                  Animated.timing(allTripsSlideAnim, {
+                    toValue: 0,
+                    duration: 320,
+                    useNativeDriver: true,
+                  }).start();
+                }}
+                hitSlop={8}
+              >
+                <Text style={[styles.sectionSub, { color: '#171717' }]}>View all →</Text>
+              </Pressable>
+            </View>
+            {completedTrips.slice(0, 2).map((trip) => (
+              <View key={trip.id} style={[styles.tripHistoryCard, { borderColor: ui.border, backgroundColor: ui.card }]}>
+                <View style={styles.tripHistoryTopRow}>
+                  <Text style={[styles.tripHistoryRoute, { color: ui.text }]}>{trip.route}</Text>
+                  <Text style={[styles.tripHistoryFare, { color: ui.text }]}>{trip.fare}</Text>
+                </View>
+                <Text style={[styles.tripHistoryMeta, { color: ui.textMuted }]}>Rider {trip.riderName} • {trip.when}</Text>
+              </View>
+            ))}
+          </View>
+        </>
+      ) : null}
+
     </>
   );
 
@@ -1253,7 +1743,7 @@ export default function DriverHomeScreen() {
         <Text style={[styles.sectionTitle, { color: ui.text }]}>Recent trips</Text>
         <Text style={[styles.sectionSub, { color: ui.textMuted }]}>Latest completed work</Text>
       </View>
-      {completedTripsSeed.map((trip) => (
+      {completedTrips.map((trip) => (
         <View key={trip.id} style={[styles.tripHistoryCard, { borderColor: ui.border, backgroundColor: ui.card }]}> 
           <View style={styles.tripHistoryTopRow}>
             <Text style={[styles.tripHistoryRoute, { color: ui.text }]}>{trip.route}</Text>
@@ -1285,34 +1775,63 @@ export default function DriverHomeScreen() {
       {subScreen ? renderSubScreen() : null}
 
       {!subScreen && showHomeChrome ? (
-        <View style={[styles.mapWrapper, { backgroundColor: ui.bg }]}> 
+        <Animated.View style={[styles.mapWrapper, { backgroundColor: ui.bg, height: enrouteMapHeight }]}> 
           <MapView
-            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-            style={StyleSheet.absoluteFillObject}
-            initialRegion={{
-              latitude: KSA_MAP_CENTER.latitude,
-              longitude: KSA_MAP_CENTER.longitude,
-              latitudeDelta: 0.12,
-              longitudeDelta: 0.12,
-            }}
-            showsUserLocation={false}
-            showsMyLocationButton={false}
-            showsCompass={false}
-            toolbarEnabled={false}
+          ref={(ref) => {
+            mainMapRef.current = ref;
+          }}
+          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={{
+            latitude: KSA_MAP_CENTER.latitude,
+            longitude: KSA_MAP_CENTER.longitude,
+            latitudeDelta: 0.12,
+            longitudeDelta: 0.12,
+          }}
+          showsUserLocation={false}
+          showsMyLocationButton={false}
+          showsCompass={false}
+          toolbarEnabled={false}
+          onMapReady={() => {
+            if (!currentTrip || currentTrip.status !== 'in_trip') return;
+            try {
+            mainMapRef.current?.fitToCoordinates([
+              currentTrip.pickupCoordinate,
+              currentTrip.dropoffCoordinate,
+            ], {
+              edgePadding: {
+              top: Platform.OS === 'ios' ? 160 : 140,
+              right: 52,
+              bottom: 140,
+              left: 52,
+              },
+              animated: true,
+            });
+            } catch {
+            // ignore
+            }
+          }}
           >
-            <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.pickupMarker} />
-            </Marker>
-            <Marker coordinate={mapDropoff} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.dropoffMarker} />
-            </Marker>
-            <Marker coordinate={driverMarker} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.driverMarker}>
-                <Ionicons name="car-sport" size={18} color="#ffffff" />
-              </View>
-            </Marker>
+          {currentTrip ? (
+            <Polyline
+            coordinates={[currentTrip.pickupCoordinate, currentTrip.dropoffCoordinate]}
+            strokeColor="#FFD000"
+            strokeWidth={5}
+            />
+          ) : null}
+          <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.pickupMarker} />
+          </Marker>
+          <Marker coordinate={mapDropoff} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.dropoffMarker} />
+          </Marker>
+          <Marker coordinate={driverMarker} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.driverMarker}>
+            <Ionicons name="car-sport" size={18} color="#ffffff" />
+            </View>
+          </Marker>
           </MapView>
-        </View>
+        </Animated.View>
       ) : null}
 
       {!subScreen && showHomeChrome ? (
@@ -1347,6 +1866,48 @@ export default function DriverHomeScreen() {
               <Ionicons name="notifications" size={18} color="#ffffff" />
             </Pressable>
           </View>
+
+          {currentTrip?.status === 'in_trip' ? (
+            <Animated.View
+              style={[
+                styles.enrouteHeaderBar,
+                {
+                  opacity: enrouteOverlayAnim,
+                  transform: [
+                    {
+                      translateY: enrouteOverlayAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-8, 0],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.enrouteHeaderBarInner}>
+                <View style={styles.enrouteHeaderBarTextBlock}>
+                  <Text style={styles.enrouteHeaderBarTitle}>En route</Text>
+                  <Text style={styles.enrouteHeaderBarTime}>{formatMinSec(enrouteRemainingSec)}</Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    hapticLight();
+                    toggleEnrouteExpanded();
+                  }}
+                  hitSlop={10}
+                  style={styles.enrouteHeaderDropdownBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={enrouteExpanded ? 'Collapse map' : 'Expand map'}
+                >
+                  <Ionicons
+                    name={enrouteExpanded ? 'chevron-down' : 'chevron-up'}
+                    size={18}
+                    color="#ffffff"
+                  />
+                </Pressable>
+              </View>
+            </Animated.View>
+          ) : null}
         </View>
       ) : null}
 
@@ -1589,7 +2150,7 @@ export default function DriverHomeScreen() {
             ) : null}
             <View style={styles.tripPinActions}>
               <Pressable
-                style={[styles.secondaryButton, styles.tripPinSecondaryButton, { borderColor: ui.border, backgroundColor: ui.soft }]}
+                style={[styles.tripPinActionButton, { borderColor: ui.border, backgroundColor: ui.soft }]}
                 onPress={() => {
                   setTripPinModalVisible(false);
                   setTripPinInput('');
@@ -1599,7 +2160,7 @@ export default function DriverHomeScreen() {
                 <Text style={[styles.secondaryButtonText, { color: ui.text }]}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[styles.primaryButton, styles.tripPinPrimaryButton, { backgroundColor: ui.accent }]}
+                style={[styles.tripPinActionButton, { backgroundColor: ui.accent, borderColor: 'transparent' }]}
                 onPress={confirmTripStartPin}
               >
                 <Text style={styles.primaryButtonText}>Start</Text>
@@ -1615,7 +2176,7 @@ export default function DriverHomeScreen() {
         <View style={[styles.modalSheet, { backgroundColor: ui.panelBg }]}>
           <View style={styles.modalHandle} />
           <Text style={[styles.modalTitle, { color: ui.text }]}>Today's Earnings</Text>
-          <Text style={[styles.modalStat, { color: '#16a34a' }]}>J$12,430</Text>
+          <Text style={[styles.modalStat, { color: '#16a34a' }]}>{formatJmd(availableCashOutAmount)}</Text>
           <Text style={[styles.modalStatLabel, { color: ui.textMuted }]}>Total earned today</Text>
           <View style={[styles.modalDivider, { backgroundColor: ui.border }]} />
           {[
@@ -1631,8 +2192,15 @@ export default function DriverHomeScreen() {
           ))}
           <View style={[styles.modalDivider, { backgroundColor: ui.border }]} />
           <Text style={[styles.modalFootnote, { color: ui.textMuted }]}>Payments are settled daily at midnight.</Text>
-          <Pressable style={styles.modalCloseBtn} onPress={() => setEarningsModal(null)}>
-            <Text style={styles.modalCloseBtnText}>Done</Text>
+          <Pressable
+            style={[styles.modalPrimaryBtn, { backgroundColor: '#16a34a', marginTop: 12 }]}
+            onPress={() => {
+              hapticMedium();
+              setEarningsModal(null);
+              setSubScreen('cashOut');
+            }}
+          >
+            <Text style={styles.modalPrimaryBtnText}>Cash out</Text>
           </Pressable>
         </View>
       </Modal>
@@ -1647,7 +2215,7 @@ export default function DriverHomeScreen() {
           <Text style={[styles.modalStatLabel, { color: ui.textMuted }]}>Completed trips</Text>
           <View style={[styles.modalDivider, { backgroundColor: ui.border }]} />
           {[
-            ...completedTripsSeed,
+            ...completedTrips,
             { id: 'done-4', riderName: 'Omar S.', route: 'Kingston to Portmore', fare: 'J$2,650', when: 'Today, 6:50 AM' },
             { id: 'done-5', riderName: 'Tanya M.', route: 'New Kingston to Airport', fare: 'J$3,100', when: 'Today, 5:30 AM' },
           ].map((trip) => (
@@ -1696,6 +2264,65 @@ export default function DriverHomeScreen() {
           </Pressable>
         </View>
       </Modal>
+
+      {/* ── Trip detail modal (centered, like rider Activity) ── */}
+      <Modal
+        visible={selectedTripDetail !== null}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setSelectedTripDetail(null)}
+      >
+        <Pressable style={styles.rideDetailOverlay} onPress={() => setSelectedTripDetail(null)}>
+          <Pressable style={[styles.rideDetailSheet, { backgroundColor: ui.card }]} onPress={() => {}}>
+            <View style={styles.rideDetailHandle} />
+            <View style={[styles.rideDetailIconWrap, { backgroundColor: '#171717' }]}>
+              <Text style={styles.rideDetailAvatarText}>
+                {(selectedTripDetail?.riderName ?? '').split(/\s+/).map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+              </Text>
+            </View>
+
+            {(() => {
+              const route = splitTripRoute(selectedTripDetail?.route ?? '');
+              return (
+                <>
+                  <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{route.from}</Text>
+                  {route.to ? (
+                    <View style={styles.rideDetailArrowRow}>
+                      <View style={[styles.rideDetailLine, { backgroundColor: ui.border }]} />
+                      <Ionicons name="arrow-down" size={16} color={ui.textMuted} />
+                      <View style={[styles.rideDetailLine, { backgroundColor: ui.border }]} />
+                    </View>
+                  ) : null}
+                  {route.to ? (
+                    <Text style={[styles.rideDetailRoute, { color: ui.text }]}>{route.to}</Text>
+                  ) : null}
+                </>
+              );
+            })()}
+
+            <View style={[styles.rideDetailDivider, { backgroundColor: ui.border }]} />
+            <View style={styles.rideDetailMeta}>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Rider</Text>
+                <Text style={[styles.rideDetailMetaValue, { color: ui.text }]}>{selectedTripDetail?.riderName}</Text>
+              </View>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Date</Text>
+                <Text style={[styles.rideDetailMetaValue, { color: ui.text }]}>{selectedTripDetail?.when}</Text>
+              </View>
+              <View style={styles.rideDetailMetaItem}>
+                <Text style={[styles.rideDetailMetaLabel, { color: ui.textMuted }]}>Fare</Text>
+                <Text style={[styles.rideDetailMetaValue, { color: ui.text }]}>{selectedTripDetail?.fare}</Text>
+              </View>
+            </View>
+
+            <Pressable style={styles.rideDetailCloseBtn} onPress={() => setSelectedTripDetail(null)}>
+              <Text style={styles.rideDetailCloseBtnText}>Done</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1704,8 +2331,135 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  enrouteHeaderBar: {
+    marginTop: 10,
+  },
+  enrouteHeaderBarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#0b0b0b',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingLeft: 12,
+    paddingRight: 10,
+  },
+  enrouteHeaderBarTextBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  enrouteHeaderBarTitle: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  enrouteHeaderBarTime: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  enrouteHeaderDropdownBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   overlaySafeArea: {
     flex: 1,
+  },
+  editProfileRoot: {
+    flex: 1,
+  },
+  editProfileHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 56,
+    paddingHorizontal: 4,
+    paddingBottom: 12,
+  },
+  editProfileHeaderSide: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editProfileHeaderTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  editProfileScroll: {
+    flex: 1,
+  },
+  profileViewScrollContent: {
+    paddingHorizontal: 18,
+    paddingBottom: 40,
+  },
+  profileViewSectionHeadingWrap: {
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  profileViewSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  profileViewCard: {
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    marginBottom: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  profileViewDivider: {
+    height: StyleSheet.hairlineWidth,
+  },
+  profileViewValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    textAlign: 'right',
+  },
+  profilePaymentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+  },
+  profilePaymentCardIcon: {
+    width: 44,
+    height: 28,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profilePaymentVisa: {
+    backgroundColor: '#1a1f71',
+  },
+  profilePaymentMc: {
+    backgroundColor: '#eb001b',
+  },
+  profilePaymentCardIconText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  profilePaymentLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  profilePaymentSub: {
+    fontSize: 12,
+    marginTop: 2,
   },
   mapWrapper: {
     position: 'absolute',
@@ -1807,13 +2561,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   earningsPillValueYellow: {
-    color: '#171717',
+    color: '#ffffff',
     fontSize: 15,
     fontWeight: '900',
     lineHeight: 19,
   },
   earningsPillLabelYellow: {
-    color: 'rgba(23,23,23,0.65)',
+    color: 'rgba(255,255,255,0.78)',
     fontSize: 10,
     fontWeight: '600',
     textAlign: 'center',
@@ -1841,6 +2595,98 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(120,120,128,0.35)',
     alignSelf: 'center',
     marginBottom: 6,
+  },
+  /* ── centered trip detail modal (like rider Activity) ── */
+  rideDetailOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  rideDetailSheet: {
+    width: '100%',
+    borderRadius: 28,
+    padding: 24,
+    alignItems: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    elevation: 16,
+  },
+  rideDetailHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(120,120,128,0.35)',
+    marginBottom: 8,
+  },
+  rideDetailIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  rideDetailAvatarText: {
+    color: '#FFD000',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  rideDetailRoute: {
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  rideDetailArrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    width: '60%',
+    marginVertical: 2,
+  },
+  rideDetailLine: {
+    flex: 1,
+    height: 1,
+  },
+  rideDetailDivider: {
+    height: 1,
+    width: '100%',
+    marginVertical: 12,
+  },
+  rideDetailMeta: {
+    width: '100%',
+    gap: 12,
+  },
+  rideDetailMetaItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  rideDetailMetaLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  rideDetailMetaValue: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  rideDetailCloseBtn: {
+    marginTop: 16,
+    backgroundColor: '#FFD000',
+    borderRadius: 16,
+    paddingVertical: 14,
+    width: '100%',
+    alignItems: 'center',
+  },
+  rideDetailCloseBtnText: {
+    color: '#000000',
+    fontSize: 15,
+    fontWeight: '800',
   },
   requestModalCenteredOverlay: {
     flex: 1,
@@ -1942,15 +2788,17 @@ const styles = StyleSheet.create({
   },
   tripPinActions: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
+    marginTop: 6,
   },
-  tripPinPrimaryButton: {
+  tripPinActionButton: {
     flex: 1,
+    minHeight: 52,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
-  },
-  tripPinSecondaryButton: {
-    minWidth: 110,
-    justifyContent: 'center',
+    alignItems: 'center',
   },
   requestModalQueueBadge: {
     alignSelf: 'center',
@@ -1963,10 +2811,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  modalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: '900',
+    flex: 1,
     textAlign: 'center',
+  },
+  modalCashOutPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  modalCashOutPillText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   modalStat: {
     fontSize: 38,
@@ -2022,6 +2887,16 @@ const styles = StyleSheet.create({
   modalCloseBtnText: {
     color: '#171717',
     fontSize: 15,
+    fontWeight: '900',
+  },
+  modalPrimaryBtn: {
+    borderRadius: 18,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  modalPrimaryBtnText: {
+    color: '#ffffff',
+    fontSize: 16,
     fontWeight: '900',
   },
   ratingBarRow: {
@@ -2163,6 +3038,11 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     padding: 18,
     gap: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 6,
   },
   heroTopRow: {
     flexDirection: 'row',
@@ -2206,6 +3086,11 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 14,
     gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 5,
   },
   statValue: {
     color: '#ffffff',
@@ -2324,21 +3209,21 @@ const styles = StyleSheet.create({
   },
   currentTripStageRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 5,
   },
   tripPhasePill: {
     flex: 1,
-    height: 44,
-    borderRadius: 22,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 4,
   },
   tripPhasePillText: {
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '900',
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
   },
   currentTripStageChip: {
     flexDirection: 'row',
@@ -2672,6 +3557,11 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     padding: 14,
     gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   tripHistoryTopRow: {
     flexDirection: 'row',
@@ -2690,6 +3580,249 @@ const styles = StyleSheet.create({
   tripHistoryMeta: {
     fontSize: 12,
     lineHeight: 17,
+  },
+  homeSectionGap: {
+    marginTop: 20,
+    gap: 10,
+  },
+  weeklyCard: {
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  weeklyStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  weeklyStatItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  weeklyStatDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 36,
+  },
+  weeklyStatValue: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  weeklyStatLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  cashOutAvailableCard: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 460,
+    borderRadius: 26,
+    paddingVertical: 26,
+    paddingHorizontal: 20,
+    minHeight: 150,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    elevation: 10,
+  },
+  cashOutFrostRadial: {
+    position: 'absolute',
+    borderRadius: 999,
+    opacity: 1,
+  },
+  cashOutFrostRadialTopLeft: {
+    width: 220,
+    height: 220,
+    left: -80,
+    top: -110,
+  },
+  cashOutFrostRadialBottomRight: {
+    width: 260,
+    height: 260,
+    right: -120,
+    bottom: -140,
+  },
+  cashOutFrostRadialCenter: {
+    width: 180,
+    height: 180,
+    left: '48%',
+    top: '50%',
+    transform: [{ translateX: -90 }, { translateY: -90 }],
+  },
+  cashOutAvailableHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 4,
+  },
+  cashOutAvailableName: {
+    fontSize: 16,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  cashOutAvailableStaffCode: {
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  cashOutAvailableLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  cashOutAvailableValue: {
+    fontSize: 40,
+    fontWeight: '900',
+    letterSpacing: -0.8,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  cashOutAmountInputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  cashOutAmountInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  cashOutAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    gap: 12,
+  },
+  cashOutAmountRowLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  cashOutInlineInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    minWidth: 120,
+  },
+  cashOutAmountCurrency: {
+    fontSize: 14,
+    fontWeight: '800',
+    marginRight: 8,
+  },
+  cashOutInlineAmountInput: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '900',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  cashOutAmountInput: {
+    flex: 1,
+    fontSize: 22,
+    fontWeight: '900',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  cashOutAmountError: {
+    marginTop: 10,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFD000',
+  },
+  cashOutBreakdownWrap: {
+    paddingTop: 12,
+  },
+  cashOutBreakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    gap: 12,
+  },
+  cashOutBreakdownLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  cashOutBreakdownValue: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  cashOutBreakdownNetLabel: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  cashOutBreakdownNetValue: {
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  cashOutAmountCard: {
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 20,
+    gap: 8,
+    marginTop: 8,
+  },
+  cashOutAmountLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  cashOutAmountValue: {
+    fontSize: 36,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  cashOutFeeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  cashOutFeeText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  cashOutDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 4,
+  },
+  cashOutNetLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  cashOutNetValue: {
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  cashOutFootnote: {
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginTop: 16,
+    paddingHorizontal: 8,
   },
   accountLine: {
     fontSize: 14,

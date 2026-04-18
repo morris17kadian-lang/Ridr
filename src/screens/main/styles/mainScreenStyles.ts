@@ -1541,10 +1541,10 @@ export const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#555555',
-    textAlign: 'center',
+    textAlign: 'right',
   },
   profileViewValueMultiline: {
-    textAlign: 'center',
+    textAlign: 'right',
   },
   profileViewDivider: {
     height: StyleSheet.hairlineWidth,

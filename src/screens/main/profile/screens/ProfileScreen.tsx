@@ -153,7 +153,7 @@ export function ProfileScreen({
             style={[styles.profileViewSectionTitle, styles.profileViewSectionTitleFlex, { color: ui.text }]}
             numberOfLines={1}
           >
-            Payment methods
+            Payout methods
           </Text>
           <Pressable
             style={[
