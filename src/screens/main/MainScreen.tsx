@@ -5,11 +5,11 @@ import {
   Animated,
   Dimensions,
   Image,
+  Linking,
   Modal,
   PanResponder,
   Platform,
   Pressable,
-  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -17,7 +17,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
@@ -64,7 +64,8 @@ import {
 import {
   PROFILE_HEADER_ICON_GLYPH,
 } from './mainScreenLayoutConstants';
-import { GOOGLE_MAP_STYLE_DARK, GOOGLE_MAP_STYLE_LIGHT } from './map/googleMapStyles';
+import { RidrMapView } from './map/RidrMapView';
+import { useRidrMapMarkerStyles, useRidrMapRouteStroke } from './map/useRidrMapVisuals';
 import { styles } from './styles/mainScreenStyles';
 import { ActivityTabScreen } from './tabs/ActivityTabScreen';
 import { FavouritesTabScreen } from './tabs/FavouritesTabScreen';
@@ -332,17 +333,6 @@ const destinationSuggestions = [
     coordinate: { latitude: 18.0392, longitude: -76.7938 },
   },
 ] satisfies DestinationSuggestion[];
-
-// Default centre: Kingston, Jamaica
-const JAMAICA_KINGSTON = { latitude: 17.9970, longitude: -76.7936 };
-
-/** Pitched camera so 3D extruded buildings show (tilt with two fingers to adjust). Uses Google Maps on both platforms. */
-const MAP_INITIAL_3D_CAMERA = {
-  center: JAMAICA_KINGSTON,
-  heading: 0,
-  pitch: 52,
-  zoom: 17,
-};
 
 function decodeGooglePolyline(encoded: string): LatLng[] {
   const points: LatLng[] = [];
@@ -1485,56 +1475,14 @@ export default function MainScreen() {
     [colors]
   );
 
-  const googleMapCustomStyle = useMemo(
-    () => (isDark ? GOOGLE_MAP_STYLE_DARK : GOOGLE_MAP_STYLE_LIGHT),
-    [isDark]
-  );
+  const mapRouteStroke = useRidrMapRouteStroke(isDark, colors.accent, colors.text);
 
-  const mapRouteStroke = useMemo(
-    () => ({
-      outer: isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.95)',
-      inner: isDark ? colors.accent : colors.text,
-    }),
-    [isDark, colors.accent, colors.text]
-  );
-
-  const mapMarkerStyles = useMemo(
-    () => ({
-      pickup: [
-        styles.mapMarkerPickup,
-        {
-          backgroundColor: isDark ? colors.accent : '#171717',
-          borderColor: isDark ? colors.background : colors.accent,
-        },
-      ],
-      dropoff: [
-        styles.mapMarkerDropoff,
-        {
-          backgroundColor: isDark ? colors.background : colors.accent,
-          borderColor: isDark ? colors.accent : colors.text,
-        },
-      ],
-      nearbyDriver: [
-        styles.mapMarkerNearbyDriver,
-        {
-          backgroundColor: isDark ? colors.card : '#171717',
-          borderColor: colors.accent,
-        },
-      ],
-      routeAnimatorOuter: [
-        styles.routeAnimatorOuter,
-        {
-          backgroundColor: isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.95)',
-          borderColor: isDark ? colors.accent : '#171717',
-        },
-      ],
-      routeAnimatorInner: [
-        styles.routeAnimatorInner,
-        { backgroundColor: isDark ? colors.accent : '#171717' },
-      ],
-    }),
-    [isDark, colors.accent, colors.background, colors.card, colors.text]
-  );
+  const mapMarkerStyles = useRidrMapMarkerStyles(isDark, {
+    accent: colors.accent,
+    background: colors.background,
+    card: colors.card,
+    text: colors.text,
+  });
 
   const estimatedFareUsd = useMemo(
     () => estimateFareUsd(routeDistanceM, routeDurationSec),
@@ -2929,10 +2877,10 @@ export default function MainScreen() {
       {/* Map: short when sheet is up, full window when sheet is minimized */}
       <Animated.View style={[styles.mapWrapper, { height: minimizedMapH, backgroundColor: colors.background }]}>
         <View ref={mapMeasureRef} style={StyleSheet.absoluteFillObject} collapsable={false}>
-        <MapView
+        <RidrMapView
           ref={mapViewRef}
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFillObject}
+          isDark={isDark}
+          loadingBackgroundColor={colors.background}
           onPress={() => {
             setMapLocationAction(null);
             if (destinationFocused || toFocused) {
@@ -2985,19 +2933,6 @@ export default function MainScreen() {
                 : prev
             );
           }}
-          initialCamera={MAP_INITIAL_3D_CAMERA}
-          mapType="standard"
-          customMapStyle={googleMapCustomStyle}
-          loadingBackgroundColor={colors.background}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          toolbarEnabled={false}
-          rotateEnabled={true}
-          pitchEnabled={true}
-          {...(Platform.OS === 'android'
-            ? { showsBuildings: true, googleRenderer: 'LATEST' as const }
-            : {})}
         >
           {hasRoute ? (
             <>
@@ -3057,7 +2992,7 @@ export default function MainScreen() {
               </View>
             </Marker>
           ))}
-        </MapView>
+        </RidrMapView>
         </View>
       </Animated.View>
 
@@ -3082,7 +3017,17 @@ export default function MainScreen() {
               style={[styles.modeSwitchButton, { backgroundColor: ui.softBg, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.divider }]}
               onPress={() => {
                 hapticLight();
-                void setAppMode('driver');
+                void (async () => {
+                  try {
+                    await setAppMode('driver');
+                  } catch (e) {
+                    const msg = e instanceof Error ? e.message : 'Location is required for Driver mode.';
+                    Alert.alert('Location required', msg, [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+                    ]);
+                  }
+                })();
               }}
               accessibilityRole="button"
               accessibilityLabel="Switch to driver mode"
@@ -3390,14 +3335,6 @@ export default function MainScreen() {
         scrollEnabled
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshingMain}
-            onRefresh={onRefreshMain}
-            tintColor={ui.textMuted}
-            colors={[ui.ctaBg]}
-          />
-        }
         onScroll={(e) => {
           scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
         }}

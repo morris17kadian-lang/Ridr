@@ -1,18 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Alert,
   Animated,
   Dimensions,
+  Linking,
   Modal,
   PanResponder,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -20,16 +22,29 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import { useFocusEffect } from '@react-navigation/native';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  createPaymentMethod,
+  deletePaymentMethod,
+  listPaymentMethods,
+  paymentMethodToDisplay,
+  updatePaymentMethod,
+} from '../../api';
+import { ensureDriverLocationReady } from '../../lib/driverLocationRequirement';
+import { fetchDrivingRouteCoords } from '../../lib/directionsRoute';
 import { clearAppCache } from '../../lib/appCacheStorage';
 import { incomingRequestChimeUri } from '../../lib/incomingRequestChime';
 import { useAuth } from '../../context/AuthContext';
 import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../../lib/haptics';
 import { useAppTheme, type ThemeOverride } from '../../theme/ThemeProvider';
 import { KSA_MAP_CENTER, type LatLng } from '../main/locationResolve';
+import { RidrMapView } from '../main/map/RidrMapView';
+import { useRidrMapMarkerStyles, useRidrMapRouteStroke } from '../main/map/useRidrMapVisuals';
 import type { MainScreenUi } from '../main/mainScreenUi';
 import { ProfileEditScreen } from '../main/profile/screens/ProfileEditScreen';
-import { DEFAULT_PROFILE_CARDS, type ProfileCard } from '../main/profile/profileTypes';
+import type { ProfileCard } from '../main/profile/profileTypes';
 import { AddPayoutModal, type PayoutAccount } from './AddPayoutModal';
 import { DriverProfileScreen } from './DriverProfileScreen';
 import type { TripStatus } from '../main/ride/activeTripTypes';
@@ -43,6 +58,8 @@ import { SettingsSupportScreen } from '../main/settings/screens/SettingsSupportS
 import { SettingsTermsScreen } from '../main/settings/screens/SettingsTermsScreen';
 import { SettingsTabScreen, type TabUi } from '../main/tabs/SettingsTabScreen';
 import { NotificationsScreen } from '../main/notifications/NotificationsScreen';
+import { DriverHomeTabContent } from './components/DriverHomeTabContent';
+import { DriverTripsTabContent } from './components/DriverTripsTabContent';
 
 type DriverTab = 'home' | 'trips' | 'settings';
 type DriverSubScreen =
@@ -229,10 +246,13 @@ function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: 
 
 const DRIVER_TRACK_H = 52;
 const DRIVER_THUMB_W = 50;
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+/** Baseline home map height when the sheet is docked; must match `sheetHome.marginTop`. */
 const DRIVER_MAP_HEIGHT = 410;
-const DRIVER_SHEET_TOP = DRIVER_MAP_HEIGHT;
 const DRIVER_SHEET_PEEK = 148;
-const DRIVER_SHEET_MINIMIZED_OFFSET = Math.max(0, Dimensions.get('window').height - DRIVER_SHEET_TOP - DRIVER_SHEET_PEEK);
+const DRIVER_SHEET_MINIMIZED_OFFSET = Math.max(0, SCREEN_HEIGHT - DRIVER_MAP_HEIGHT - DRIVER_SHEET_PEEK);
+/** Upper bound of sheet translate used for map height interpolation (avoid [0,0] inputRange). */
+const DRIVER_SHEET_SLIDE_RANGE = Math.max(1, DRIVER_SHEET_MINIMIZED_OFFSET);
 
 type SwipeToActionProps = {
   onAccept: () => void;
@@ -365,6 +385,19 @@ export default function DriverHomeScreen() {
   const pinInputRef = useRef<TextInput>(null);
   const driverSheetPan = useRef(new Animated.Value(0)).current;
   const driverSheetOffset = useRef(new Animated.Value(0)).current;
+  const driverSheetTranslateY = useMemo(
+    () => Animated.add(driverSheetPan, driverSheetOffset),
+    [driverSheetPan, driverSheetOffset]
+  );
+  const homeMapHeightAnim = useMemo(
+    () =>
+      driverSheetTranslateY.interpolate({
+        inputRange: [0, DRIVER_SHEET_SLIDE_RANGE],
+        outputRange: [DRIVER_MAP_HEIGHT, SCREEN_HEIGHT],
+        extrapolate: 'clamp',
+      }),
+    [driverSheetTranslateY]
+  );
   const [driverSheetMinimized, setDriverSheetMinimized] = useState(false);
   const driverSheetMinimizedRef = useRef(false);
   const driverSheetEnabledRef = useRef(false);
@@ -379,8 +412,8 @@ export default function DriverHomeScreen() {
   const [addressModal, setAddressModal] = useState<'home' | 'work' | null>(null);
   const [addressInput, setAddressInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [cards, setCards] = useState<ProfileCard[]>(DEFAULT_PROFILE_CARDS);
-  const [defaultCard, setDefaultCard] = useState<string | null>(DEFAULT_PROFILE_CARDS[0]?.id ?? null);
+  const [cards, setCards] = useState<ProfileCard[]>([]);
+  const [defaultCard, setDefaultCard] = useState<string | null>(null);
   const [addCardVisible, setAddCardVisible] = useState(false);
   const [payoutAccounts, setPayoutAccounts] = useState<PayoutAccount[]>([]);
   const [addPayoutVisible, setAddPayoutVisible] = useState(false);
@@ -389,7 +422,7 @@ export default function DriverHomeScreen() {
   const [newCardExpiry, setNewCardExpiry] = useState('');
   const [newCardCvv, setNewCardCvv] = useState('');
   const [editExpiryVisible, setEditExpiryVisible] = useState(false);
-  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [editExpiryCardId, setEditExpiryCardId] = useState<string | null>(null);
   const [editExpiryLast4, setEditExpiryLast4] = useState('');
   const [editExpiryMonth, setEditExpiryMonth] = useState('');
   const [editExpiryYear, setEditExpiryYear] = useState('');
@@ -409,6 +442,9 @@ export default function DriverHomeScreen() {
   const [notifPayments, setNotifPayments] = useState(true);
   const [selectedLang, setSelectedLang] = useState('English');
   const [settingsRefreshing, setSettingsRefreshing] = useState(false);
+  const [homeMapRouteCoords, setHomeMapRouteCoords] = useState<LatLng[]>([]);
+  const [requestModalRouteCoords, setRequestModalRouteCoords] = useState<LatLng[]>([]);
+  const [driverLiveLocation, setDriverLiveLocation] = useState<LatLng | null>(null);
 
   const ui = useMemo(
     () => ({
@@ -429,10 +465,28 @@ export default function DriverHomeScreen() {
     [colors, isDark]
   );
 
+  const ridrMapMarkerStyles = useRidrMapMarkerStyles(isDark, {
+    accent: colors.accent,
+    background: colors.background,
+    card: colors.card,
+    text: colors.text,
+  });
+  const ridrMapRouteStroke = useRidrMapRouteStroke(isDark, colors.accent, colors.text);
+
+  const driverHomeInitialRegion = useMemo(
+    () => ({
+      latitude: KSA_MAP_CENTER.latitude,
+      longitude: KSA_MAP_CENTER.longitude,
+      latitudeDelta: 0.12,
+      longitudeDelta: 0.12,
+    }),
+    []
+  );
+
   const riderUi = useMemo<MainScreenUi>(
     () => ({
       screenBg: colors.background,
-      panelBg: colors.card,
+      panelBg: colors.surface,
       cardBg: colors.card,
       softBg: colors.softBg,
       text: colors.text,
@@ -460,18 +514,122 @@ export default function DriverHomeScreen() {
 
   const settingsUi = useMemo<TabUi>(
     () => ({
-      screenBg: riderUi.screenBg,
-      panelBg: riderUi.panelBg,
-      cardBg: riderUi.cardBg,
-      softBg: riderUi.softBg,
-      text: riderUi.text,
-      textMuted: riderUi.textMuted,
-      divider: riderUi.divider,
-      placeholder: riderUi.placeholder,
+      screenBg: colors.background,
+      panelBg: colors.surface,
+      cardBg: colors.card,
+      softBg: colors.softBg,
+      text: colors.text,
+      textMuted: colors.textMuted,
+      divider: colors.border,
+      placeholder: colors.textPlaceholder,
       accent: colors.accent,
-      onAccentText: colors.textOnPrimary,
+      onAccentText: '#171717',
     }),
-    [colors.accent, colors.textOnPrimary, riderUi]
+    [colors]
+  );
+
+  const refreshPaymentMethods = useCallback(async () => {
+    if (!user) {
+      setCards([]);
+      setDefaultCard(null);
+      return;
+    }
+    try {
+      const { paymentMethods } = await listPaymentMethods();
+      if (paymentMethods.length === 0) {
+        setCards([]);
+        setDefaultCard(null);
+        await AsyncStorage.removeItem('profile_cards');
+        await AsyncStorage.removeItem('profile_default_card');
+        return;
+      }
+      const mapped: ProfileCard[] = paymentMethods.map((pm) => paymentMethodToDisplay(pm) as ProfileCard);
+      setCards(mapped);
+      const def = paymentMethods.find((p) => p.isDefault) ?? paymentMethods[0];
+      setDefaultCard(def?.id ?? null);
+      await AsyncStorage.setItem('profile_cards', JSON.stringify(mapped));
+      if (def?.id) await AsyncStorage.setItem('profile_default_card', def.id);
+    } catch {
+      /* offline / session */
+    }
+  }, [user]);
+
+  const selectDefaultCard = useCallback(
+    async (id: string) => {
+      try {
+        await updatePaymentMethod(id, { isDefault: true });
+        setDefaultCard(id);
+        await AsyncStorage.setItem('profile_default_card', id);
+        await refreshPaymentMethods();
+        hapticSelection();
+      } catch (e) {
+        Alert.alert('Could not set default card', e instanceof Error ? e.message : 'Try again.');
+      }
+    },
+    [refreshPaymentMethods]
+  );
+
+  const deleteCard = useCallback(
+    (id: string) => {
+      Alert.alert(
+        'Remove card?',
+        'This card will be removed from your account. You can add a new card anytime.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: () =>
+              void (async () => {
+                try {
+                  await deletePaymentMethod(id);
+                  await refreshPaymentMethods();
+                } catch (e) {
+                  Alert.alert('Could not remove card', e instanceof Error ? e.message : 'Try again.');
+                }
+              })(),
+          },
+        ]
+      );
+    },
+    [refreshPaymentMethods]
+  );
+
+  const openEditCardExpiry = useCallback((card: ProfileCard) => {
+    setEditExpiryCardId(card.id);
+    setEditExpiryLast4(card.last4);
+    const mm = card.expiryMonth?.replace(/\D/g, '') ?? '';
+    setEditExpiryMonth(mm.length === 0 ? '' : mm.length <= 2 ? mm.padStart(2, '0').slice(0, 2) : mm.slice(0, 2));
+    const y = card.expiryYear?.replace(/\D/g, '') ?? '';
+    setEditExpiryYear(y.length === 0 ? '' : y.length >= 4 ? y.slice(-2) : y.slice(0, 2));
+    setEditExpiryVisible(true);
+  }, []);
+
+  useEffect(() => {
+    void refreshPaymentMethods();
+  }, [refreshPaymentMethods]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        const loc = await ensureDriverLocationReady();
+        if (cancelled || loc.ok) return;
+        Alert.alert('Location required', loc.message, [
+          { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+          {
+            text: 'Exit Driver mode',
+            style: 'destructive',
+            onPress: () => {
+              void setAppMode('rider');
+            },
+          },
+        ]);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [setAppMode])
   );
 
   useEffect(() => {
@@ -519,6 +677,7 @@ export default function DriverHomeScreen() {
   const progressIndex = currentTrip ? DRIVER_PROGRESS_STEPS.findIndex((step) => step.key === currentTrip.status) : -1;
   const currentTripPrimaryAction = currentTrip ? getPrimaryAction(currentTrip.status) : null;
   const showHomeChrome = activeTab === 'home' && subScreen === null;
+  const driverSheetGesturesEnabled = showHomeChrome && currentTrip?.status !== 'in_trip';
   const isBusy = !!(currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled');
   const hasCurrentTrip = currentTrip != null;
   const profileDirty =
@@ -531,11 +690,186 @@ export default function DriverHomeScreen() {
 
   const mapPickup = currentTrip?.pickupCoordinate ?? incomingRequests[0]?.pickupCoordinate ?? KSA_MAP_CENTER;
   const mapDropoff = currentTrip?.dropoffCoordinate ?? incomingRequests[0]?.dropoffCoordinate ?? KSA_MAP_CENTER;
-  const driverMarker = currentTrip?.pickupCoordinate ?? { latitude: KSA_MAP_CENTER.latitude + 0.008, longitude: KSA_MAP_CENTER.longitude - 0.006 };
-  const enrouteMapHeight = enrouteMapAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [410, Dimensions.get('window').height],
-  });
+  const driverMarker =
+    (driverLiveLocation ?? currentTrip?.pickupCoordinate) ?? {
+      latitude: KSA_MAP_CENTER.latitude + 0.008,
+      longitude: KSA_MAP_CENTER.longitude - 0.006,
+    };
+
+  /** Google Directions origin/destination by trip phase; live GPS reroutes while driving. */
+  const drivingRouteContext = useMemo(() => {
+    const live = driverLiveLocation;
+    if (!currentTrip) {
+      return {
+        from: mapPickup,
+        to: mapDropoff,
+        useTraffic: false,
+      };
+    }
+    switch (currentTrip.status) {
+      case 'matched':
+        if (!live) {
+          return { from: mapPickup, to: mapDropoff, useTraffic: false };
+        }
+        return {
+          from: live,
+          to: currentTrip.pickupCoordinate,
+          useTraffic: true,
+        };
+      case 'arrived':
+        return {
+          from: live ?? currentTrip.pickupCoordinate,
+          to: currentTrip.dropoffCoordinate,
+          useTraffic: true,
+        };
+      case 'in_trip':
+        return {
+          from: live ?? currentTrip.pickupCoordinate,
+          to: currentTrip.dropoffCoordinate,
+          useTraffic: true,
+        };
+      default:
+        return { from: mapPickup, to: mapDropoff, useTraffic: false };
+    }
+  }, [currentTrip, driverLiveLocation, mapPickup, mapDropoff]);
+
+  const routeRound5 = (c: LatLng) => `${Math.round(c.latitude * 1e5) / 1e5},${Math.round(c.longitude * 1e5) / 1e5}`;
+  const routeFetchKeyFrom = routeRound5(drivingRouteContext.from);
+  const routeFetchKeyTo = routeRound5(drivingRouteContext.to);
+  const hasDrivingRouteLeg =
+    Math.abs(drivingRouteContext.from.latitude - drivingRouteContext.to.latitude) > 1e-6 ||
+    Math.abs(drivingRouteContext.from.longitude - drivingRouteContext.to.longitude) > 1e-6;
+
+  const homeRoutePolylineCoords =
+    homeMapRouteCoords.length > 1 ? homeMapRouteCoords : [drivingRouteContext.from, drivingRouteContext.to];
+  const hasDistinctPickupDrop =
+    Math.abs(mapPickup.latitude - mapDropoff.latitude) > 1e-6 ||
+    Math.abs(mapPickup.longitude - mapDropoff.longitude) > 1e-6;
+
+  useEffect(() => {
+    if (!showHomeChrome) {
+      setDriverLiveLocation(null);
+      return;
+    }
+    let subscription: Location.LocationSubscription | null = null;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const fg = await Location.getForegroundPermissionsAsync();
+        if (!fg.granted || cancelled) return;
+        const seed = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (!cancelled) {
+          setDriverLiveLocation({
+            latitude: seed.coords.latitude,
+            longitude: seed.coords.longitude,
+          });
+        }
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 5000,
+            distanceInterval: 25,
+          },
+          (loc) => {
+            setDriverLiveLocation({
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+            });
+          }
+        );
+      } catch {
+        // ignore — map still works with static fallback
+      }
+    })();
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
+  }, [showHomeChrome]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasDrivingRouteLeg) {
+      setHomeMapRouteCoords([]);
+      return;
+    }
+    const debounceMs = drivingRouteContext.useTraffic ? 900 : 0;
+    const timer = setTimeout(() => {
+      void fetchDrivingRouteCoords(drivingRouteContext.from, drivingRouteContext.to, {
+        useTraffic: drivingRouteContext.useTraffic,
+      }).then((coords) => {
+        if (!cancelled) setHomeMapRouteCoords(coords);
+      });
+    }, debounceMs);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    hasDrivingRouteLeg,
+    routeFetchKeyFrom,
+    routeFetchKeyTo,
+    drivingRouteContext.useTraffic,
+    currentTrip?.id,
+    currentTrip?.status,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!requestModalVisible || incomingRequests.length === 0) {
+      setRequestModalRouteCoords([]);
+      return;
+    }
+    const req = incomingRequests[0];
+    void fetchDrivingRouteCoords(req.pickupCoordinate, req.dropoffCoordinate).then((coords) => {
+      if (!cancelled) setRequestModalRouteCoords(coords);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [requestModalVisible, incomingRequests[0]?.id]);
+
+  useEffect(() => {
+    if (!showHomeChrome || currentTrip?.status === 'in_trip' || !hasDistinctPickupDrop) return;
+    if (homeMapRouteCoords.length < 2) return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        mainMapRef.current?.fitToCoordinates(homeMapRouteCoords, {
+          edgePadding: {
+            top: Platform.OS === 'ios' ? 200 : 170,
+            right: 48,
+            bottom: 340,
+            left: 48,
+          },
+          animated: true,
+        });
+      } catch {
+        // ignore
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [currentTrip?.status, hasDistinctPickupDrop, homeMapRouteCoords, showHomeChrome]);
+
+  useEffect(() => {
+    if (!currentTrip || currentTrip.status !== 'in_trip' || !hasDistinctPickupDrop) return;
+    if (homeMapRouteCoords.length < 2) return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        mainMapRef.current?.fitToCoordinates(homeMapRouteCoords, {
+          edgePadding: {
+            top: Platform.OS === 'ios' ? 160 : 140,
+            right: 52,
+            bottom: 140,
+            left: 52,
+          },
+          animated: true,
+        });
+      } catch {
+        // ignore
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [currentTrip?.id, currentTrip?.status, hasDistinctPickupDrop, homeMapRouteCoords]);
 
   const getEnrouteTotalSec = (trip: DriverTrip) => {
     const kmMatch = trip.distance.match(/([0-9]+(?:\.[0-9]+)?)/);
@@ -583,18 +917,18 @@ export default function DriverHomeScreen() {
 
     const rafId = requestAnimationFrame(() => {
       try {
-        mainMapRef.current?.fitToCoordinates([
-          currentTrip.pickupCoordinate,
-          currentTrip.dropoffCoordinate,
-        ], {
-          edgePadding: {
-            top: Platform.OS === 'ios' ? 220 : 200,
-            right: 52,
-            bottom: 280,
-            left: 52,
-          },
-          animated: true,
-        });
+        mainMapRef.current?.fitToCoordinates(
+          [currentTrip.pickupCoordinate, currentTrip.dropoffCoordinate],
+          {
+            edgePadding: {
+              top: Platform.OS === 'ios' ? 220 : 200,
+              right: 52,
+              bottom: 280,
+              left: 52,
+            },
+            animated: true,
+          }
+        );
       } catch {
         // ignore
       }
@@ -651,7 +985,8 @@ export default function DriverHomeScreen() {
   const enrouteRemainingSec = (() => {
     if (!currentTrip || currentTrip.status !== 'in_trip') return 0;
     const total = getEnrouteTotalSec(currentTrip);
-    const elapsed = Math.max(0, Math.floor((enrouteNowMs - currentTrip.startedAtMs) / 1000));
+    const tripStartMs = currentTrip.startedAtMs ?? currentTrip.acceptedAtMs;
+    const elapsed = Math.max(0, Math.floor((enrouteNowMs - tripStartMs) / 1000));
     return Math.max(0, total - elapsed);
   })();
 
@@ -733,9 +1068,9 @@ export default function DriverHomeScreen() {
       onMoveShouldSetPanResponder: (_, gs) => {
         if (!driverSheetEnabledRef.current) return false;
         if (driverSheetMinimizedRef.current) {
-          return gs.dy < -8 && Math.abs(gs.dy) > Math.abs(gs.dx);
+          return gs.dy < -5 && Math.abs(gs.dy) > Math.abs(gs.dx) * 1.1;
         }
-        return driverScrollOffsetRef.current <= 0 && gs.dy > 8 && Math.abs(gs.dy) > Math.abs(gs.dx);
+        return driverScrollOffsetRef.current <= 2 && gs.dy > 5 && Math.abs(gs.dy) > Math.abs(gs.dx) * 1.1;
       },
       onMoveShouldSetPanResponderCapture: () => false,
       onPanResponderTerminationRequest: () => false,
@@ -752,27 +1087,27 @@ export default function DriverHomeScreen() {
       },
       onPanResponderRelease: (_, gs) => {
         if (driverSheetMinimizedRef.current) {
-          if (gs.dy < -40 || gs.vy < -0.35) {
+          if (gs.dy < -28 || gs.vy < -0.28) {
             expandDriverSheet();
           } else {
             Animated.spring(driverSheetPan, {
               toValue: 0,
               useNativeDriver: false,
-              friction: 9,
-              tension: 70,
+              friction: 8,
+              tension: 78,
             }).start();
           }
           return;
         }
 
-        if (gs.dy > 120 || gs.vy > 0.5) {
+        if (gs.dy > 72 || gs.vy > 0.38) {
           minimizeDriverSheet();
         } else {
           Animated.spring(driverSheetPan, {
             toValue: 0,
             useNativeDriver: false,
-            friction: 9,
-            tension: 70,
+            friction: 8,
+            tension: 78,
           }).start();
         }
       },
@@ -793,8 +1128,9 @@ export default function DriverHomeScreen() {
   }, [hasCurrentTrip, incomingRequests.length, isOnline, showHomeChrome]);
 
   useEffect(() => {
-    driverSheetEnabledRef.current = showHomeChrome;
-  }, [showHomeChrome]);
+    // Lock the bottom sheet while the trip is active (after correct PIN -> in_trip).
+    driverSheetEnabledRef.current = driverSheetGesturesEnabled;
+  }, [driverSheetGesturesEnabled]);
 
   useEffect(() => {
     if (showHomeChrome) return;
@@ -1011,6 +1347,8 @@ export default function DriverHomeScreen() {
     setTripPinModalVisible(false);
     setTripPinInput('');
     setTripPinError('');
+    // Immediately dock the sheet to map mode once trip starts.
+    minimizeDriverSheet();
     setCurrentTrip((prev) => (prev ? { ...prev, status: 'in_trip', startedAtMs: Date.now() } : prev));
   };
 
@@ -1049,65 +1387,91 @@ export default function DriverHomeScreen() {
   };
 
   const saveNewCard = async () => {
-    const digits = newCardNumber.replace(/\D/g, '');
-    if (digits.length < 12) {
-      Alert.alert('Card number', 'Enter a valid card number.');
+    if (!user) {
+      Alert.alert('Sign in required', 'Sign in to save a payment method.');
       return;
     }
-    const nextCard: ProfileCard = {
-      id: `driver-card-${Date.now()}`,
-      type: digits.startsWith('4') ? 'visa' : 'mastercard',
-      last4: digits.slice(-4),
-      label: newCardName.trim() || 'Driver card',
-      expiryMonth: newCardExpiry.slice(0, 2),
-      expiryYear: newCardExpiry.slice(-2),
-    };
-    setCards((prev) => [...prev, nextCard]);
-    if (!defaultCard) setDefaultCard(nextCard.id);
-    closeAddCardSheet();
+    const digits = newCardNumber.replace(/\D/g, '');
+    if (digits.length < 13 || digits.length > 19) {
+      Alert.alert('Invalid card number', 'Enter the full number on your card.');
+      return;
+    }
+    const exp = newCardExpiry.trim();
+    if (!/^\d{2}\/\d{2}$/.test(exp)) {
+      Alert.alert('Invalid expiry', 'Use MM/YY (e.g. 08/27).');
+      return;
+    }
+    const cvv = newCardCvv.replace(/\D/g, '');
+    if (cvv.length < 3 || cvv.length > 4) {
+      Alert.alert('Invalid CVV', 'Enter the 3 or 4 digit security code.');
+      return;
+    }
+    const [mm, yy] = exp.split('/');
+    const expiryMonth = mm.padStart(2, '0');
+    const expiryYear = `20${yy}`;
+    const first = digits[0];
+    const brand = first === '5' ? 'Mastercard' : 'Visa';
+    const token =
+      (typeof process.env.EXPO_PUBLIC_PAYMENT_DEV_TOKEN === 'string' &&
+        process.env.EXPO_PUBLIC_PAYMENT_DEV_TOKEN.trim()) ||
+      'dev_powertranz_spi_placeholder';
+    try {
+      await createPaymentMethod({
+        provider: 'powertranz',
+        token,
+        last4: digits.slice(-4),
+        brand,
+        expiryMonth,
+        expiryYear,
+        isDefault: cards.length === 0,
+      });
+      await refreshPaymentMethods();
+      closeAddCardSheet();
+    } catch (e) {
+      Alert.alert('Could not save card', e instanceof Error ? e.message : 'Try again.');
+    }
   };
 
   const closeEditCardExpiry = () => {
     setEditExpiryVisible(false);
-    setEditingCardId(null);
+    setEditExpiryCardId(null);
     setEditExpiryLast4('');
     setEditExpiryMonth('');
     setEditExpiryYear('');
   };
 
   const saveEditCardExpiry = async () => {
-    if (!editingCardId) return;
-    setCards((prev) =>
-      prev.map((card) =>
-        card.id === editingCardId
-          ? { ...card, expiryMonth: editExpiryMonth.trim(), expiryYear: editExpiryYear.trim() }
-          : card
-      )
-    );
-    closeEditCardExpiry();
+    if (!editExpiryCardId) return;
+    const mm = editExpiryMonth.replace(/\D/g, '').slice(0, 2);
+    const yy = editExpiryYear.replace(/\D/g, '').slice(-2);
+    if (mm.length !== 2) {
+      Alert.alert('Expiry', 'Enter month as MM (01–12).');
+      return;
+    }
+    const mNum = parseInt(mm, 10);
+    if (mNum < 1 || mNum > 12) {
+      Alert.alert('Expiry', 'Month must be between 01 and 12.');
+      return;
+    }
+    if (yy.length !== 2) {
+      Alert.alert('Expiry', 'Enter year as YY.');
+      return;
+    }
+    try {
+      await updatePaymentMethod(editExpiryCardId, { expiryMonth: mm, expiryYear: yy });
+      closeEditCardExpiry();
+      await refreshPaymentMethods();
+    } catch (e) {
+      Alert.alert('Could not update card', e instanceof Error ? e.message : 'Try again.');
+    }
   };
 
   const onPaymentMethodLongPress = (card: ProfileCard) => {
-    Alert.alert('Payment method', `Manage ${card.label}`, [
-      {
-        text: 'Update expiry',
-        onPress: () => {
-          setEditingCardId(card.id);
-          setEditExpiryLast4(card.last4);
-          setEditExpiryMonth(card.expiryMonth ?? '');
-          setEditExpiryYear(card.expiryYear ?? '');
-          setEditExpiryVisible(true);
-        },
-      },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          setCards((prev) => prev.filter((item) => item.id !== card.id));
-          setDefaultCard((prev) => (prev === card.id ? null : prev));
-        },
-      },
+    hapticMedium();
+    Alert.alert('Payment method', 'Update expiry or remove this card.', [
       { text: 'Cancel', style: 'cancel' },
+      { text: 'Update expiry', onPress: () => openEditCardExpiry(card) },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteCard(card.id) },
     ]);
   };
 
@@ -1123,20 +1487,38 @@ export default function DriverHomeScreen() {
 
   const onRefreshSettings = () => {
     setSettingsRefreshing(true);
-    setTimeout(() => setSettingsRefreshing(false), 300);
+    void (async () => {
+      try {
+        await refreshPaymentMethods();
+      } finally {
+        setSettingsRefreshing(false);
+      }
+    })();
   };
 
   const onClearDriverCache = () => {
-    Alert.alert('Clear cache?', 'This removes locally cached app data on this device.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear',
-        style: 'destructive',
-        onPress: () => {
-          void clearAppCache();
+    Alert.alert(
+      'Clear cache?',
+      'Removes cached data on this device, including your local copy of payment methods. You stay signed in.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await clearAppCache();
+                await refreshPaymentMethods();
+                Alert.alert('Cache cleared');
+              } catch (e) {
+                Alert.alert('Could not clear cache', e instanceof Error ? e.message : 'Try again.');
+              }
+            })();
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
   const renderSubScreen = () => {
@@ -1453,7 +1835,7 @@ export default function DriverHomeScreen() {
             onBack={() => setSubScreen(null)}
             cards={cards}
             defaultCard={defaultCard}
-            selectDefaultCard={setDefaultCard}
+            selectDefaultCard={selectDefaultCard}
             addCardVisible={addCardVisible}
             setAddCardVisible={setAddCardVisible}
             newCardNumber={newCardNumber}
@@ -1569,248 +1951,6 @@ export default function DriverHomeScreen() {
     }
   };
 
-  const renderHomeTab = () => (
-    <>
-      {currentTrip?.status !== 'in_trip' ? (
-        <>
-          {/* ── Earnings summary pills ── */}
-          <View style={styles.earningsRow}>
-            <Pressable
-              style={[styles.earningsPill, { backgroundColor: '#171717' }]}
-              onPress={() => { hapticLight(); setEarningsModal('rating'); }}
-            >
-              <Text style={styles.earningsPillValueBlack}>4.9 ★</Text>
-              <Text style={styles.earningsPillLabelBlack}>Rating</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.earningsPill, styles.earningsPillCenter, { backgroundColor: '#16a34a' }]}
-              onPress={() => { hapticLight(); setEarningsModal('earnings'); }}
-            >
-              <Text style={styles.earningsPillValueYellow}>{formatJmd(availableCashOutAmount)}</Text>
-              <Text style={styles.earningsPillLabelYellow}>Today&apos;s earnings</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.earningsPill, { backgroundColor: '#171717' }]}
-              onPress={() => { hapticLight(); setEarningsModal('trips'); }}
-            >
-              <Text style={styles.earningsPillValueBlack}>9</Text>
-              <Text style={styles.earningsPillLabelBlack}>Trips today</Text>
-            </Pressable>
-          </View>
-        </>
-      ) : null}
-
-      {currentTrip && currentTrip.status !== 'in_trip' ? (
-        <View style={styles.currentTripWrap}>
-          {currentTrip.status !== 'in_trip' ? (
-            <Pressable
-              style={styles.currentTripArrivalBar}
-              onPress={() => {
-                hapticSelection();
-                setCurrentTripExpanded((prev) => !prev);
-              }}
-            >
-              <Ionicons name={getTripBarCopy(currentTrip, tripUiTick).icon} size={18} color="#ffffff" />
-              <Text style={styles.currentTripArrivalBarText} numberOfLines={1}>
-                {getTripBarCopy(currentTrip, tripUiTick).title}
-              </Text>
-              <View style={styles.currentTripArrivalPill}>
-                <Text style={styles.currentTripArrivalPillText}>{getTripBarCopy(currentTrip, tripUiTick).pill}</Text>
-              </View>
-              <View style={styles.currentTripArrivalChevron}>
-                <Ionicons name={currentTripExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#000000" />
-              </View>
-            </Pressable>
-          ) : null}
-
-          {currentTripExpanded ? (
-            <View style={[styles.currentTripSurface, { backgroundColor: ui.soft, borderColor: ui.border }]}> 
-              <View style={styles.currentTripTopRow}>
-                <View style={styles.currentTripRiderMeta}>
-                  <Text style={[styles.currentTripRiderName, { color: ui.text }]}>{currentTrip.riderName}</Text>
-                  <Text style={[styles.currentTripMeta, { color: ui.textMuted }]}>{currentTrip.distance} • {currentTrip.fare} • {currentTrip.paymentLabel}</Text>
-                </View>
-                <View style={styles.currentTripContactActions}>
-                  <Pressable
-                    style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
-                    onPress={() => {
-                      hapticLight();
-                      Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`);
-                    }}
-                  >
-                    <Ionicons name="call" size={17} color="#ffffff" />
-                  </Pressable>
-                  <Pressable
-                    style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
-                    onPress={() => {
-                      hapticLight();
-                      Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`);
-                    }}
-                  >
-                    <Ionicons name="chatbubble-ellipses" size={16} color="#ffffff" />
-                  </Pressable>
-                </View>
-              </View>
-
-              <View style={[styles.routePill, { backgroundColor: ui.card }]}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <View style={{ width: 10, alignItems: 'center' }}>
-                    <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
-                  </View>
-                  <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{currentTrip.pickup}</Text>
-                </View>
-                <View style={{ flexDirection: 'row', paddingVertical: 6 }}>
-                  <View style={{ width: 10, alignItems: 'center' }}>
-                    <View style={[styles.routeConnector, { backgroundColor: ui.textMuted, height: 22, opacity: 0.4 }]} />
-                  </View>
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <View style={{ width: 10, alignItems: 'center' }}>
-                    <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
-                  </View>
-                  <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{currentTrip.dropoff}</Text>
-                </View>
-              </View>
-
-              <View style={styles.currentTripStageRow}>
-                {DRIVER_PROGRESS_STEPS.map((step, index) => {
-                  const isActive = index <= progressIndex;
-                  const isCurrent = currentTrip.status === step.key;
-                  const isNext = index === progressIndex + 1;
-                  const isCompleted = currentTrip.status === 'completed' || currentTrip.status === 'cancelled';
-                  // in_trip is entered only via PIN modal — not directly tappable from the pill
-                  const canTap =
-                    (!isCompleted && isNext && step.key !== 'in_trip') ||
-                    (isCurrent && step.key === 'arrived');
-                  return (
-                    <Pressable
-                      key={step.key}
-                      style={[styles.tripPhasePill, {
-                        backgroundColor: isCurrent ? '#FFD000'
-                          : isActive ? '#171717'
-                          : ui.card,
-                        borderColor: isCurrent ? '#FFD000' : isActive ? '#171717' : ui.border,
-                        opacity: canTap ? 1 : isNext ? 0.45 : 1,
-                      }]}
-                      onPress={() => {
-                        if (!canTap) return;
-                        if (step.key === 'arrived') {
-                          if (currentTrip.status === 'matched') {
-                            hapticMedium();
-                            setCurrentTrip((prev) => prev ? { ...prev, status: 'arrived', arrivedAtMs: Date.now() } : prev);
-                          } else {
-                            hapticLight();
-                          }
-                          setTripPinInput('');
-                          setTripPinError('');
-                          setTripPinModalVisible(true);
-                        } else if (step.key === 'completed') {
-                          advanceTrip();
-                        }
-                      }}
-                    >
-                      <Text style={[styles.tripPhasePillText, {
-                        color: isCurrent ? '#171717' : isActive ? '#FFD000' : ui.textMuted,
-                      }]} numberOfLines={1}>
-                        {step.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-
-      {currentTrip?.status !== 'in_trip' ? (
-        <>
-          {/* ── This week ── */}
-          <View style={styles.homeSectionGap}>
-            <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: ui.text }]}>This week</Text>
-            </View>
-            <Pressable
-              style={[styles.weeklyCard, { backgroundColor: ui.card, borderColor: ui.border }]}
-              onPress={() => {
-                hapticLight();
-                setEarningsModal('earnings');
-              }}
-            >
-              <View style={styles.weeklyStatRow}>
-                <View style={styles.weeklyStatItem}>
-                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>94%</Text>
-                  <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Acceptance</Text>
-                </View>
-                <View style={[styles.weeklyStatDivider, { backgroundColor: ui.border }]} />
-                <View style={styles.weeklyStatItem}>
-                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>6.2 hrs</Text>
-                  <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Online time</Text>
-                </View>
-                <View style={[styles.weeklyStatDivider, { backgroundColor: ui.border }]} />
-                <View style={styles.weeklyStatItem}>
-                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>J$48,200</Text>
-                  <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Earned</Text>
-                </View>
-              </View>
-            </Pressable>
-          </View>
-
-          {/* ── Recent trips ── */}
-          <View style={styles.homeSectionGap}>
-            <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: ui.text }]}>Recent trips</Text>
-              <Pressable
-                onPress={() => {
-                  hapticLight();
-                  allTripsSlideAnim.setValue(800);
-                  setSubScreen('allTrips');
-                  Animated.timing(allTripsSlideAnim, {
-                    toValue: 0,
-                    duration: 320,
-                    useNativeDriver: true,
-                  }).start();
-                }}
-                hitSlop={8}
-              >
-                <Text style={[styles.sectionSub, { color: '#171717' }]}>View all →</Text>
-              </Pressable>
-            </View>
-            {completedTrips.slice(0, 2).map((trip) => (
-              <View key={trip.id} style={[styles.tripHistoryCard, { borderColor: ui.border, backgroundColor: ui.card }]}>
-                <View style={styles.tripHistoryTopRow}>
-                  <Text style={[styles.tripHistoryRoute, { color: ui.text }]}>{trip.route}</Text>
-                  <Text style={[styles.tripHistoryFare, { color: ui.text }]}>{trip.fare}</Text>
-                </View>
-                <Text style={[styles.tripHistoryMeta, { color: ui.textMuted }]}>Rider {trip.riderName} • {trip.when}</Text>
-              </View>
-            ))}
-          </View>
-        </>
-      ) : null}
-
-    </>
-  );
-
-  const renderTripsTab = () => (
-    <>
-      <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: ui.text }]}>Recent trips</Text>
-        <Text style={[styles.sectionSub, { color: ui.textMuted }]}>Latest completed work</Text>
-      </View>
-      {completedTrips.map((trip) => (
-        <View key={trip.id} style={[styles.tripHistoryCard, { borderColor: ui.border, backgroundColor: ui.card }]}> 
-          <View style={styles.tripHistoryTopRow}>
-            <Text style={[styles.tripHistoryRoute, { color: ui.text }]}>{trip.route}</Text>
-            <Text style={[styles.tripHistoryFare, { color: ui.text }]}>{trip.fare}</Text>
-          </View>
-          <Text style={[styles.tripHistoryMeta, { color: ui.textMuted }]}>Rider {trip.riderName} • {trip.when}</Text>
-        </View>
-      ))}
-    </>
-  );
-
   const renderSettingsTab = () => (
     <SettingsTabScreen
       ui={settingsUi}
@@ -1831,62 +1971,67 @@ export default function DriverHomeScreen() {
       {subScreen ? renderSubScreen() : null}
 
       {!subScreen && showHomeChrome ? (
-        <Animated.View style={[styles.mapWrapper, { backgroundColor: ui.bg, height: enrouteMapHeight }]}> 
-          <MapView
-          ref={(ref) => {
-            mainMapRef.current = ref;
-          }}
-          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            latitude: KSA_MAP_CENTER.latitude,
-            longitude: KSA_MAP_CENTER.longitude,
-            latitudeDelta: 0.12,
-            longitudeDelta: 0.12,
-          }}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          toolbarEnabled={false}
-          onMapReady={() => {
-            if (!currentTrip || currentTrip.status !== 'in_trip') return;
-            try {
-            mainMapRef.current?.fitToCoordinates([
-              currentTrip.pickupCoordinate,
-              currentTrip.dropoffCoordinate,
-            ], {
-              edgePadding: {
-              top: Platform.OS === 'ios' ? 160 : 140,
-              right: 52,
-              bottom: 140,
-              left: 52,
-              },
-              animated: true,
-            });
-            } catch {
-            // ignore
-            }
-          }}
+        <Animated.View style={[styles.mapWrapper, { backgroundColor: ui.bg, height: homeMapHeightAnim }]}>
+          <RidrMapView
+            ref={(ref) => {
+              mainMapRef.current = ref;
+            }}
+            isDark={isDark}
+            loadingBackgroundColor={ui.bg}
+            initialRegion={driverHomeInitialRegion}
+            showsCompass={false}
+            toolbarEnabled={false}
+            onMapReady={() => {
+              if (!currentTrip || currentTrip.status !== 'in_trip') return;
+              try {
+                const coords =
+                  homeRoutePolylineCoords.length >= 2 ? homeRoutePolylineCoords : [mapPickup, mapDropoff];
+                mainMapRef.current?.fitToCoordinates(coords, {
+                  edgePadding: {
+                    top: Platform.OS === 'ios' ? 160 : 140,
+                    right: 52,
+                    bottom: 140,
+                    left: 52,
+                  },
+                  animated: true,
+                });
+              } catch {
+                // ignore
+              }
+            }}
           >
-          {currentTrip ? (
-            <Polyline
-            coordinates={[currentTrip.pickupCoordinate, currentTrip.dropoffCoordinate]}
-            strokeColor="#FFD000"
-            strokeWidth={5}
-            />
-          ) : null}
-          <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.pickupMarker} />
-          </Marker>
-          <Marker coordinate={mapDropoff} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.dropoffMarker} />
-          </Marker>
-          <Marker coordinate={driverMarker} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.driverMarker}>
-            <Ionicons name="car-sport" size={18} color="#ffffff" />
-            </View>
-          </Marker>
-          </MapView>
+            {hasDistinctPickupDrop ? (
+              <>
+                <Polyline
+                  coordinates={homeRoutePolylineCoords}
+                  strokeColor={ridrMapRouteStroke.outer}
+                  strokeWidth={9}
+                  lineCap="round"
+                  lineJoin="round"
+                  geodesic={false}
+                />
+                <Polyline
+                  coordinates={homeRoutePolylineCoords}
+                  strokeColor={ridrMapRouteStroke.inner}
+                  strokeWidth={6}
+                  lineCap="round"
+                  lineJoin="round"
+                  geodesic={false}
+                />
+              </>
+            ) : null}
+            <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={ridrMapMarkerStyles.pickup} />
+            </Marker>
+            <Marker coordinate={mapDropoff} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={ridrMapMarkerStyles.dropoff} />
+            </Marker>
+            <Marker coordinate={driverMarker} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={ridrMapMarkerStyles.nearbyDriver}>
+                <Ionicons name="car-sport" size={18} color={colors.accent} />
+              </View>
+            </Marker>
+          </RidrMapView>
         </Animated.View>
       ) : null}
 
@@ -1909,8 +2054,9 @@ export default function DriverHomeScreen() {
                 <Ionicons name="person" size={18} color={ui.text} />
               </Pressable>
               <View style={styles.profileLabels}>
-                <Text style={[styles.greeting, { color: ui.textMuted }]}>Good morning</Text>
-                <Text style={[styles.userName, { color: ui.text }]}>{name}</Text>
+                <Text style={[styles.userName, { color: ui.text }]} numberOfLines={1}>
+                  {name}
+                </Text>
               </View>
             </View>
             <Pressable
@@ -1967,7 +2113,7 @@ export default function DriverHomeScreen() {
         </View>
       ) : null}
 
-      {!subScreen && showHomeChrome && currentTrip?.status === 'in_trip' && headerLayoutHeight > 0 ? (
+      {!subScreen && showHomeChrome && currentTrip && currentTrip.status === 'in_trip' && headerLayoutHeight > 0 ? (
         <Animated.View
           pointerEvents={currentTripExpanded ? 'box-none' : 'none'}
           style={[
@@ -2047,8 +2193,8 @@ export default function DriverHomeScreen() {
         </Animated.View>
       ) : null}
 
-      {!subScreen && !(showHomeChrome && currentTrip?.status === 'in_trip') ? (
-      <SafeAreaView style={styles.overlaySafeArea} pointerEvents="box-none">
+      {!subScreen && currentTrip?.status !== 'in_trip' ? (
+        <SafeAreaView edges={['bottom']} style={styles.overlaySafeArea} pointerEvents="box-none">
         <Animated.View
           style={[
             styles.sheet,
@@ -2060,14 +2206,21 @@ export default function DriverHomeScreen() {
             },
           ]}
         > 
-          {showHomeChrome ? <View style={[styles.sheetDragHandle, { backgroundColor: ui.border }]} {...driverSheetPanResponder.panHandlers} /> : null}
+          {showHomeChrome ? (
+            <View
+              style={styles.sheetDragHandleHit}
+              {...(driverSheetGesturesEnabled ? driverSheetPanResponder.panHandlers : {})}
+            >
+              <View style={[styles.sheetDragHandle, { backgroundColor: ui.border }]} />
+            </View>
+          ) : null}
           {activeTab === 'settings' ? renderSettingsTab() : (
             <ScrollView
               ref={driverHomeScrollRef}
               contentContainerStyle={[
                 styles.content,
                 showHomeChrome
-                  ? (currentTrip?.status === 'in_trip' ? styles.contentEnroute : styles.contentHome)
+                  ? styles.contentHome
                   : styles.contentFlat,
               ]}
               showsVerticalScrollIndicator={false}
@@ -2077,8 +2230,36 @@ export default function DriverHomeScreen() {
               }}
               scrollEventThrottle={16}
             >
-              {activeTab === 'home' ? renderHomeTab() : null}
-              {activeTab === 'trips' ? renderTripsTab() : null}
+              {activeTab === 'home' ? (
+                <DriverHomeTabContent
+                  styles={styles}
+                  ui={ui}
+                  availableCashOutAmount={availableCashOutAmount}
+                  currentTrip={currentTrip}
+                  currentTripExpanded={currentTripExpanded}
+                  tripUiTick={tripUiTick}
+                  progressIndex={progressIndex}
+                  completedTrips={completedTrips}
+                  allTripsSlideAnim={allTripsSlideAnim}
+                  driverProgressSteps={DRIVER_PROGRESS_STEPS}
+                  formatJmd={formatJmd}
+                  getTripBarCopy={getTripBarCopy}
+                  setEarningsModal={setEarningsModal}
+                  setCurrentTripExpanded={setCurrentTripExpanded}
+                  setCurrentTrip={setCurrentTrip}
+                  setTripPinInput={setTripPinInput}
+                  setTripPinError={setTripPinError}
+                  setTripPinModalVisible={setTripPinModalVisible}
+                  setSubScreen={setSubScreen}
+                  advanceTrip={advanceTrip}
+                  hapticLight={hapticLight}
+                  hapticMedium={hapticMedium}
+                  hapticSelection={hapticSelection}
+                />
+              ) : null}
+              {activeTab === 'trips' ? (
+                <DriverTripsTabContent styles={styles} ui={ui} completedTrips={completedTrips} />
+              ) : null}
             </ScrollView>
           )}
         </Animated.View>
@@ -2099,7 +2280,21 @@ export default function DriverHomeScreen() {
           style={styles.tabItem}
           onPress={() => {
             hapticMedium();
-            setIsOnline((prev) => !prev);
+            if (isOnline) {
+              setIsOnline(false);
+              return;
+            }
+            void (async () => {
+              const loc = await ensureDriverLocationReady();
+              if (!loc.ok) {
+                Alert.alert('Location required', loc.message, [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+                ]);
+                return;
+              }
+              setIsOnline(true);
+            })();
           }}
           accessibilityRole="switch"
           accessibilityLabel={isOnline ? 'Go offline' : 'Go online'}
@@ -2118,11 +2313,33 @@ export default function DriverHomeScreen() {
       </BlurView>
       ) : null}
 
+      {!subScreen && showHomeChrome && driverSheetMinimized && currentTrip?.status !== 'in_trip' ? (
+        <View style={styles.sheetExpandBtnWrap} pointerEvents="box-none">
+          <Pressable
+            style={[styles.sheetExpandBtn, { backgroundColor: ui.panelBg, borderColor: ui.border }]}
+            onPress={() => {
+              hapticMedium();
+              expandDriverSheet();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Expand trip sheet"
+          >
+            <Ionicons name="chevron-up" size={20} color={ui.accent} />
+            <Text style={[styles.sheetExpandBtnLabel, { color: ui.text }]}>Trip sheet</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {/* ── Incoming request modal ── */}
       {(() => {
         const request = incomingRequests[0];
         if (!request || !isOnline || hasCurrentTrip || !showHomeChrome || !requestModalVisible) return null;
-        
+
+        const modalRouteCoords =
+          requestModalRouteCoords.length > 1
+            ? requestModalRouteCoords
+            : [request.pickupCoordinate, request.dropoffCoordinate];
+
         return (
           <Modal
             key={request.id}
@@ -2153,42 +2370,50 @@ export default function DriverHomeScreen() {
               </View>
               {/* Mini map */}
               <View style={styles.requestModalMap}>
-                <MapView
-                  provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+                <RidrMapView
+                  isDark={isDark}
+                  loadingBackgroundColor={ui.panelBg}
                   style={StyleSheet.absoluteFillObject}
                   scrollEnabled
                   zoomEnabled
-                  rotateEnabled
-                  pitchEnabled={false}
-                  showsUserLocation={false}
-                  showsMyLocationButton={false}
-                  showsCompass
-                  toolbarEnabled={false}
+                  showsCompass={false}
                   initialRegion={{
                     latitude: (request.pickupCoordinate.latitude + request.dropoffCoordinate.latitude) / 2,
                     longitude: (request.pickupCoordinate.longitude + request.dropoffCoordinate.longitude) / 2,
-                    latitudeDelta: Math.abs(request.pickupCoordinate.latitude - request.dropoffCoordinate.latitude) * 2.4 + 0.025,
-                    longitudeDelta: Math.abs(request.pickupCoordinate.longitude - request.dropoffCoordinate.longitude) * 2.4 + 0.025,
+                    latitudeDelta:
+                      Math.abs(request.pickupCoordinate.latitude - request.dropoffCoordinate.latitude) * 2.4 + 0.025,
+                    longitudeDelta:
+                      Math.abs(request.pickupCoordinate.longitude - request.dropoffCoordinate.longitude) * 2.4 + 0.025,
                   }}
                 >
                   <Polyline
-                    coordinates={[request.pickupCoordinate, request.dropoffCoordinate]}
-                    strokeColor="#FFD000"
-                    strokeWidth={4}
-                    lineDashPattern={[8, 4]}
+                    coordinates={modalRouteCoords}
+                    strokeColor={ridrMapRouteStroke.outer}
+                    strokeWidth={7}
+                    lineCap="round"
+                    lineJoin="round"
+                    geodesic={false}
+                  />
+                  <Polyline
+                    coordinates={modalRouteCoords}
+                    strokeColor={ridrMapRouteStroke.inner}
+                    strokeWidth={5}
+                    lineCap="round"
+                    lineJoin="round"
+                    geodesic={false}
                   />
                   <Marker coordinate={request.pickupCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
-                    <View style={styles.pickupMarker} />
+                    <View style={ridrMapMarkerStyles.pickup} />
                   </Marker>
                   <Marker coordinate={request.dropoffCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
-                    <View style={styles.dropoffMarker} />
+                    <View style={ridrMapMarkerStyles.dropoff} />
                   </Marker>
                   <Marker coordinate={driverMarker} anchor={{ x: 0.5, y: 0.5 }}>
-                    <View style={styles.driverMarker}>
-                      <Ionicons name="car-sport" size={14} color="#ffffff" />
+                    <View style={ridrMapMarkerStyles.nearbyDriver}>
+                      <Ionicons name="car-sport" size={14} color={colors.accent} />
                     </View>
                   </Marker>
-                </MapView>
+                </RidrMapView>
               </View>
               {/* Top row: meta + payment */}
               <View style={styles.requestTopRow}>
@@ -2629,7 +2854,6 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 410,
     overflow: 'hidden',
   },
   fixedHeader: {
@@ -2664,15 +2888,10 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
   },
-  greeting: {
-    fontSize: 13,
-    fontWeight: '600',
-    lineHeight: 18,
-  },
   userName: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
-    lineHeight: 28,
+    lineHeight: 24,
   },
   profileIconShell: {
     width: 40,
@@ -3172,13 +3391,19 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 28,
     overflow: 'hidden',
   },
+  sheetDragHandleHit: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    marginTop: 2,
+    marginBottom: 0,
+  },
   sheetDragHandle: {
-    width: 44,
-    height: 5,
+    width: 56,
+    height: 6,
     borderRadius: 3,
     alignSelf: 'center',
-    marginTop: 10,
-    marginBottom: -2,
   },
   sheetHome: {
     marginTop: DRIVER_MAP_HEIGHT,
@@ -3995,6 +4220,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  sheetExpandBtnWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 100,
+    alignItems: 'center',
+    zIndex: 7,
+    pointerEvents: 'box-none',
+  },
+  sheetExpandBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  sheetExpandBtnLabel: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
   tabBar: {
     position: 'absolute',
     bottom: 16,
@@ -4041,31 +4294,5 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 10,
     alignSelf: 'flex-end',
-  },
-  pickupMarker: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#171717',
-    borderWidth: 4,
-    borderColor: '#FFD000',
-  },
-  dropoffMarker: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#FFD000',
-    borderWidth: 4,
-    borderColor: '#171717',
-  },
-  driverMarker: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#171717',
-    borderWidth: 2,
-    borderColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

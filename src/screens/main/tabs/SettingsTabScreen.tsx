@@ -6,6 +6,8 @@ import type { ThemeOverride } from '../../../theme/ThemeProvider';
 import { mainTabStyles as styles } from '../styles/mainTabStyles';
 import type { TabUi } from './ActivityTabScreen';
 
+export type { TabUi };
+
 type SettingsScreen =
   | 'settingsPassword'
   | 'settingsPayment'

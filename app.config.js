@@ -39,6 +39,15 @@ module.exports = {
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
       baseUrl: process.env.EXPO_PUBLIC_BASE_URL,
     },
-    plugins: ['expo-web-browser'],
+    plugins: [
+      'expo-web-browser',
+      [
+        'expo-location',
+        {
+          locationWhenInUsePermission:
+            'Ridr uses your location in Driver mode so riders can see when you arrive and to match you with nearby requests.',
+        },
+      ],
+    ],
   },
 };

@@ -3,6 +3,8 @@ import Constants from 'expo-constants';
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
+import { ensureDriverLocationReady } from '../lib/driverLocationRequirement';
+
 export const AUTH_SESSION_KEY = 'ridr_auth_session_v1';
 export const APP_MODE_KEY = 'ridr_app_mode_v1';
 const DEMO_ACCESS_TOKEN_PREFIX = 'ridr_demo_access_token';
@@ -159,6 +161,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setAppMode = useCallback(async (mode: AppMode) => {
+    if (mode === 'driver') {
+      const loc = await ensureDriverLocationReady();
+      if (!loc.ok) {
+        throw new Error(loc.message);
+      }
+    }
     setAppModeState(mode);
     await AsyncStorage.setItem(APP_MODE_KEY, mode);
   }, []);
@@ -238,7 +246,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           AsyncStorage.getItem(APP_MODE_KEY),
         ]);
         if (savedMode === 'rider' || savedMode === 'driver') {
-          setAppModeState(savedMode);
+          if (savedMode === 'driver') {
+            const loc = await ensureDriverLocationReady();
+            if (loc.ok) {
+              setAppModeState('driver');
+            } else {
+              setAppModeState('rider');
+              await AsyncStorage.setItem(APP_MODE_KEY, 'rider');
+            }
+          } else {
+            setAppModeState('rider');
+          }
         }
         if (raw) {
           try {
