@@ -1,8 +1,16 @@
-import React from 'react';
-import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { type ComponentProps } from 'react';
+import {
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { mockFavouritePlaces } from '../data/mainTabData';
+import type { FavouritePlaceRow, FrequentRouteRow } from '../data/mainTabData';
 import { mainTabStyles as styles } from '../styles/mainTabStyles';
 import type { TabUi } from './ActivityTabScreen';
 
@@ -17,6 +25,8 @@ type Props = {
   onRefresh: () => void;
   onBookFavPlace: (title: string, subtitle: string) => void;
   onBookFavRoute: (from: string, to: string) => void;
+  favouritePlaces: FavouritePlaceRow[];
+  frequentRoutes: FrequentRouteRow[];
 };
 
 export function FavouritesTabScreen({
@@ -30,6 +40,8 @@ export function FavouritesTabScreen({
   onRefresh,
   onBookFavPlace,
   onBookFavRoute,
+  favouritePlaces,
+  frequentRoutes,
 }: Props) {
   return (
     <View style={[styles.tabScreen, { backgroundColor: ui.screenBg }]}>
@@ -62,7 +74,10 @@ export function FavouritesTabScreen({
         ) : null}
       </View>
       <ScrollView
-        contentContainerStyle={styles.tabScreenContent}
+        nestedScrollEnabled={Platform.OS === 'android'}
+        keyboardShouldPersistTaps="handled"
+        alwaysBounceVertical
+        contentContainerStyle={[styles.tabScreenContent, { flexGrow: 1 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -70,11 +85,12 @@ export function FavouritesTabScreen({
             onRefresh={onRefresh}
             tintColor={ui.textMuted}
             colors={[isDark ? '#f5f5f5' : '#171717']}
+            progressViewOffset={Platform.OS === 'android' ? 8 : undefined}
           />
         }
       >
         <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Saved places</Text>
-        {mockFavouritePlaces
+        {favouritePlaces
           .filter(
             (p) =>
               !favSearch.trim() ||
@@ -84,7 +100,7 @@ export function FavouritesTabScreen({
             <Pressable key={place.id} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]} onPress={() => onBookFavPlace(place.title, place.subtitle)}>
               <View style={styles.favItem}>
                 <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
-                  <Ionicons name={place.icon} size={18} color={ui.text} />
+                  <Ionicons name={place.icon as ComponentProps<typeof Ionicons>['name']} size={18} color={ui.text} />
                 </View>
                 <View style={styles.favBody}>
                   <Text style={[styles.favTitle, { color: ui.text }]}>{place.title}</Text>
@@ -96,11 +112,12 @@ export function FavouritesTabScreen({
           ))}
 
         <Text style={[styles.tabSectionLabel, { color: ui.textMuted }]}>Frequent routes</Text>
-        {[
-          { from: 'Half-Way Tree', to: 'Norman Manley Airport', count: 6 },
-          { from: 'New Kingston', to: 'Portmore Mall', count: 3 },
-        ].map((route, i) => (
-          <Pressable key={i} style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]} onPress={() => onBookFavRoute(route.from, route.to)}>
+        {frequentRoutes.map((route) => (
+          <Pressable
+            key={route.id}
+            style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}
+            onPress={() => onBookFavRoute(route.from, route.to)}
+          >
             <View style={styles.favItem}>
               <View style={[styles.favIconWrap, { backgroundColor: isDark ? '#2b2b31' : '#f0f0f0' }]}>
                 <Ionicons name="repeat" size={18} color={ui.text} />

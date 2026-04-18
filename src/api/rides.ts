@@ -1,4 +1,4 @@
-import { getApiBaseUrl, getDefaultRideTypeSlug } from './config';
+import { getDefaultRideTypeSlug } from './config';
 import { apiRequest } from './http';
 
 export type GeoPoint = {
@@ -114,27 +114,11 @@ export type CreateImmediateRideInput = {
 };
 
 export async function postFareEstimate(body: KingstonZoneFareEstimateRequest): Promise<FareEstimateResponse> {
-  if (__DEV__) {
-    const url = `${getApiBaseUrl()}/rides/estimate`;
-    console.log(
-      '[Kingston zone pricing] Postman: Ride requests → Fare estimate\n',
-      `→ POST ${url}\n`,
-      '[Kingston zone pricing] exact request JSON (wire body):\n',
-      JSON.stringify(body, null, 2)
-    );
-  }
-  const res = await apiRequest<FareEstimateResponse>('/rides/estimate', {
+  return apiRequest<FareEstimateResponse>('/rides/estimate', {
     method: 'POST',
     json: body,
     auth: true,
   });
-  if (__DEV__) {
-    console.log(
-      '[Kingston zone pricing] response (zones + fare):\n',
-      body,
-    );
-  }
-  return res;
 }
 
 /** Exact JSON body sent to `POST /rides` (use for logging or tests). */
@@ -184,15 +168,6 @@ export async function createImmediateRide(
   input: CreateImmediateRideInput
 ): Promise<{ rideRequest: RideRequestDto }> {
   const json = getCreateRideRequestBody(input);
-  if (__DEV__) {
-    const url = `${getApiBaseUrl()}/rides`;
-    console.log(
-      '[Kingston zone pricing] Postman: Ride requests → Create ride (immediate)\n',
-      `→ POST ${url}\n`,
-      '[Kingston zone pricing] exact request JSON (wire body, includes full polyline):\n',
-      JSON.stringify(json, null, 2)
-    );
-  }
   return apiRequest<{ rideRequest: RideRequestDto }>('/rides', {
     method: 'POST',
     json,

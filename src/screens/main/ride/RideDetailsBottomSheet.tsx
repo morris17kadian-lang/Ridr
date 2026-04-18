@@ -307,7 +307,7 @@ export function RideDetailsBottomSheet({
                       style: 'destructive',
                       onPress: () => {
                         setCancelModalVisible(false);
-                        onCancelRide(selectedReason, opt.fee === CANCEL_FEE_FULL_FARE ? trip.fareUsd : opt.fee);
+                        onCancelRide?.(selectedReason, opt.fee === CANCEL_FEE_FULL_FARE ? trip.fareUsd : opt.fee);
                       },
                     },
                   ]

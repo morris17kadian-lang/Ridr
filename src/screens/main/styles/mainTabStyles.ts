@@ -66,8 +66,15 @@ export const mainTabStyles = StyleSheet.create({
   },
   activityFilterRow: {
     marginBottom: 4,
+    width: '100%',
+    flexGrow: 0,
+    flexShrink: 0,
+    maxHeight: 44,
   },
   activityFilterContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexGrow: 0,
     gap: 8,
     paddingBottom: 2,
   },
@@ -75,6 +82,8 @@ export const mainTabStyles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 6,
+    flexShrink: 0,
+    alignSelf: 'center',
   },
   activityFilterPillText: {
     fontSize: 13,

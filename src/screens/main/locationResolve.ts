@@ -106,6 +106,31 @@ async function geocodeAddress(
       const inArea = pickCoordinateInJamaica(data.results);
       if (inArea) return { coordinate: inArea };
       if (data.results?.length && data.status === 'OK') {
+        const lower = q.toLowerCase();
+        const hasJmHint =
+          lower.includes('jamaica') ||
+          lower.includes('kingston') ||
+          lower.includes('st. andrew') ||
+          lower.includes('st andrew') ||
+          lower.includes('montego bay') ||
+          lower.includes('ocho rios') ||
+          lower.includes('negril') ||
+          lower.includes('portmore') ||
+          lower.includes('spanish town');
+        if (!hasJmHint) {
+          const retryQ = `${q}, Kingston, Jamaica`;
+          const retryUrl =
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(retryQ)}` +
+            `&bounds=${encodeURIComponent(BOUNDS_PARAM)}` +
+            `&region=jm` +
+            `&key=${apiKey}`;
+          const retryRes = await fetch(retryUrl);
+          const retryData = await parseGeocodeJson(retryRes);
+          if (retryData?.status === 'OK') {
+            const inRetry = pickCoordinateInJamaica(retryData.results);
+            if (inRetry) return { coordinate: inRetry };
+          }
+        }
         return { coordinate: null, issue: OUTSIDE_SERVICE_AREA_MESSAGE };
       }
       if (data.status && data.status !== 'OK') {
@@ -120,14 +145,31 @@ async function geocodeAddress(
   }
 
   try {
-    const local = await Location.geocodeAsync(q);
-    for (const g of local) {
-      const pt: LatLng = { latitude: g.latitude, longitude: g.longitude };
-      if (isInJamaicaServiceArea(pt)) return { coordinate: pt };
+    const tryLocal = async (
+      query: string
+    ): Promise<{ coordinate: LatLng } | { issue: string } | null> => {
+      const local = await Location.geocodeAsync(query);
+      for (const g of local) {
+        const pt: LatLng = { latitude: g.latitude, longitude: g.longitude };
+        if (isInJamaicaServiceArea(pt)) return { coordinate: pt };
+      }
+      if (local[0]) return { issue: OUTSIDE_SERVICE_AREA_MESSAGE };
+      return null;
+    };
+    const first = await tryLocal(q);
+    if (first && 'coordinate' in first) return { coordinate: first.coordinate };
+    const lower = q.toLowerCase();
+    const hasJmHint =
+      lower.includes('jamaica') ||
+      lower.includes('kingston') ||
+      lower.includes('st. andrew') ||
+      lower.includes('st andrew');
+    if (!hasJmHint) {
+      const second = await tryLocal(`${q}, Kingston, Jamaica`);
+      if (second && 'coordinate' in second) return { coordinate: second.coordinate };
+      if (second && 'issue' in second) return { coordinate: null, issue: second.issue };
     }
-    if (local[0]) {
-      return { coordinate: null, issue: OUTSIDE_SERVICE_AREA_MESSAGE };
-    }
+    if (first && 'issue' in first) return { coordinate: null, issue: first.issue };
   } catch {
     /* noop */
   }
