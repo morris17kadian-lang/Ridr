@@ -3,6 +3,7 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Alert,
   Animated,
@@ -229,7 +230,7 @@ function getTripBarCopy(trip: DriverTrip, tick: number): { title: string; pill: 
 const DRIVER_TRACK_H = 52;
 const DRIVER_THUMB_W = 50;
 const DRIVER_MAP_HEIGHT = 410;
-const DRIVER_SHEET_TOP = 250;
+const DRIVER_SHEET_TOP = DRIVER_MAP_HEIGHT;
 const DRIVER_SHEET_PEEK = 148;
 const DRIVER_SHEET_MINIMIZED_OFFSET = Math.max(0, Dimensions.get('window').height - DRIVER_SHEET_TOP - DRIVER_SHEET_PEEK);
 
@@ -328,6 +329,8 @@ function SwipeToAction({ onAccept, onDecline, disabled, isDark, borderColor }: S
 
 export default function DriverHomeScreen() {
   const { colors, isDark, themeOverride, setThemeOverride } = useAppTheme();
+  const insets = useSafeAreaInsets();
+  const [headerLayoutHeight, setHeaderLayoutHeight] = useState(0);
   const { user, setAppMode, signOut } = useAuth();
   const [activeTab, setActiveTab] = useState<DriverTab>('home');
   const [subScreen, setSubScreen] = useState<DriverSubScreen>(null);
@@ -348,12 +351,15 @@ export default function DriverHomeScreen() {
   const [tripPinInput, setTripPinInput] = useState('');
   const [tripPinError, setTripPinError] = useState('');
   const mainMapRef = useRef<MapView | null>(null);
-  const enrouteOverlayAnim = useRef(new Animated.Value(0)).current;
+  const enrouteBarAnim = useRef(new Animated.Value(0)).current;
+  const enrouteMapAnim = useRef(new Animated.Value(0)).current;
   const [enrouteNowMs, setEnrouteNowMs] = useState(() => Date.now());
   const [enrouteExpanded, setEnrouteExpanded] = useState(true);
+  const enrouteDropdownAnim = useRef(new Animated.Value(0)).current;
   const enrouteEntranceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestModalPulse = useRef(new Animated.Value(1)).current;
   const requestModalPan = useRef(new Animated.ValueXY()).current;
+  const driverHomeScrollRef = useRef<ScrollView | null>(null);
   const allTripsSlideAnim = useRef(new Animated.Value(800)).current;
   const requestSoundRef = useRef<Audio.Sound | null>(null);
   const pinInputRef = useRef<TextInput>(null);
@@ -526,7 +532,7 @@ export default function DriverHomeScreen() {
   const mapPickup = currentTrip?.pickupCoordinate ?? incomingRequests[0]?.pickupCoordinate ?? KSA_MAP_CENTER;
   const mapDropoff = currentTrip?.dropoffCoordinate ?? incomingRequests[0]?.dropoffCoordinate ?? KSA_MAP_CENTER;
   const driverMarker = currentTrip?.pickupCoordinate ?? { latitude: KSA_MAP_CENTER.latitude + 0.008, longitude: KSA_MAP_CENTER.longitude - 0.006 };
-  const enrouteMapHeight = enrouteOverlayAnim.interpolate({
+  const enrouteMapHeight = enrouteMapAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [410, Dimensions.get('window').height],
   });
@@ -545,17 +551,35 @@ export default function DriverHomeScreen() {
         clearTimeout(enrouteEntranceTimeoutRef.current);
         enrouteEntranceTimeoutRef.current = null;
       }
-      Animated.timing(enrouteOverlayAnim, {
+      Animated.timing(enrouteBarAnim, {
         toValue: 0,
-        duration: 200,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+      Animated.timing(enrouteMapAnim, {
+        toValue: 0,
+        duration: 220,
         useNativeDriver: false,
       }).start();
       setEnrouteExpanded(true);
       return;
     }
 
+    // Map fills full screen; dropdown card floats over it.
     setEnrouteExpanded(true);
-    enrouteOverlayAnim.setValue(0);
+    setCurrentTripExpanded(true);
+    enrouteMapAnim.setValue(0);
+    enrouteBarAnim.setValue(0);
+    Animated.timing(enrouteBarAnim, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+    Animated.timing(enrouteMapAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
 
     const rafId = requestAnimationFrame(() => {
       try {
@@ -564,9 +588,9 @@ export default function DriverHomeScreen() {
           currentTrip.dropoffCoordinate,
         ], {
           edgePadding: {
-            top: Platform.OS === 'ios' ? 160 : 140,
+            top: Platform.OS === 'ios' ? 220 : 200,
             right: 52,
-            bottom: 140,
+            bottom: 280,
             left: 52,
           },
           animated: true,
@@ -575,19 +599,6 @@ export default function DriverHomeScreen() {
         // ignore
       }
     });
-
-    if (enrouteEntranceTimeoutRef.current) {
-      clearTimeout(enrouteEntranceTimeoutRef.current);
-      enrouteEntranceTimeoutRef.current = null;
-    }
-
-    enrouteEntranceTimeoutRef.current = setTimeout(() => {
-      Animated.timing(enrouteOverlayAnim, {
-        toValue: 1,
-        duration: 260,
-        useNativeDriver: false,
-      }).start();
-    }, 260);
 
     return () => {
       cancelAnimationFrame(rafId);
@@ -598,6 +609,18 @@ export default function DriverHomeScreen() {
     };
   }, [currentTrip?.status]);
 
+  useEffect(() => {
+    if (currentTrip?.status !== 'in_trip') {
+      enrouteDropdownAnim.setValue(0);
+      return;
+    }
+    Animated.timing(enrouteDropdownAnim, {
+      toValue: currentTripExpanded ? 1 : 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [currentTripExpanded, currentTrip?.status]);
+
   const toggleEnrouteExpanded = () => {
     if (!currentTrip || currentTrip.status !== 'in_trip') return;
     if (enrouteEntranceTimeoutRef.current) {
@@ -606,11 +629,17 @@ export default function DriverHomeScreen() {
     }
     const next = !enrouteExpanded;
     setEnrouteExpanded(next);
-    Animated.timing(enrouteOverlayAnim, {
+    Animated.timing(enrouteMapAnim, {
       toValue: next ? 1 : 0,
       duration: 240,
       useNativeDriver: false,
     }).start();
+    // Minimize sheet when map expands, restore when map collapses.
+    if (next) {
+      minimizeDriverSheet();
+    } else {
+      expandDriverSheet();
+    }
   };
 
   useEffect(() => {
@@ -656,6 +685,31 @@ export default function DriverHomeScreen() {
       }),
     ]).start();
   };
+
+  useEffect(() => {
+    if (subScreen || !showHomeChrome) return;
+
+    // When leaving in_trip, always restore the sheet and collapse the map.
+    if (currentTrip?.status !== 'in_trip' && driverSheetMinimizedRef.current) {
+      expandDriverSheet();
+    }
+  }, [currentTrip?.status, showHomeChrome, subScreen]);
+
+  useEffect(() => {
+    if (subScreen || !showHomeChrome) return;
+    if (currentTrip?.status !== 'in_trip') return;
+
+    const rafId = requestAnimationFrame(() => {
+      try {
+        driverHomeScrollRef.current?.scrollTo({ y: 0, animated: false });
+        driverScrollOffsetRef.current = 0;
+      } catch {
+        // ignore
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [currentTrip?.status, showHomeChrome, subScreen]);
 
   const requestModalPanResponder = useRef(
     PanResponder.create({
@@ -1546,26 +1600,28 @@ export default function DriverHomeScreen() {
         </>
       ) : null}
 
-      {currentTrip ? (
+      {currentTrip && currentTrip.status !== 'in_trip' ? (
         <View style={styles.currentTripWrap}>
-          <Pressable
-            style={styles.currentTripArrivalBar}
-            onPress={() => {
-              hapticSelection();
-              setCurrentTripExpanded((prev) => !prev);
-            }}
-          >
-            <Ionicons name={getTripBarCopy(currentTrip, tripUiTick).icon} size={18} color="#ffffff" />
-            <Text style={styles.currentTripArrivalBarText} numberOfLines={1}>
-              {getTripBarCopy(currentTrip, tripUiTick).title}
-            </Text>
-            <View style={styles.currentTripArrivalPill}>
-              <Text style={styles.currentTripArrivalPillText}>{getTripBarCopy(currentTrip, tripUiTick).pill}</Text>
-            </View>
-            <View style={styles.currentTripArrivalChevron}>
-              <Ionicons name={currentTripExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#000000" />
-            </View>
-          </Pressable>
+          {currentTrip.status !== 'in_trip' ? (
+            <Pressable
+              style={styles.currentTripArrivalBar}
+              onPress={() => {
+                hapticSelection();
+                setCurrentTripExpanded((prev) => !prev);
+              }}
+            >
+              <Ionicons name={getTripBarCopy(currentTrip, tripUiTick).icon} size={18} color="#ffffff" />
+              <Text style={styles.currentTripArrivalBarText} numberOfLines={1}>
+                {getTripBarCopy(currentTrip, tripUiTick).title}
+              </Text>
+              <View style={styles.currentTripArrivalPill}>
+                <Text style={styles.currentTripArrivalPillText}>{getTripBarCopy(currentTrip, tripUiTick).pill}</Text>
+              </View>
+              <View style={styles.currentTripArrivalChevron}>
+                <Ionicons name={currentTripExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#000000" />
+              </View>
+            </Pressable>
+          ) : null}
 
           {currentTripExpanded ? (
             <View style={[styles.currentTripSurface, { backgroundColor: ui.soft, borderColor: ui.border }]}> 
@@ -1835,7 +1891,10 @@ export default function DriverHomeScreen() {
       ) : null}
 
       {!subScreen && showHomeChrome ? (
-        <View style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay }]}> 
+        <View
+          style={[styles.fixedHeader, { backgroundColor: ui.headerOverlay }]}
+          onLayout={(e) => setHeaderLayoutHeight(e.nativeEvent.layout.height)}
+        > 
           <View style={styles.headerRow}>
             <View style={styles.profileBlock}>
               <Pressable
@@ -1872,10 +1931,10 @@ export default function DriverHomeScreen() {
               style={[
                 styles.enrouteHeaderBar,
                 {
-                  opacity: enrouteOverlayAnim,
+                  opacity: enrouteBarAnim,
                   transform: [
                     {
-                      translateY: enrouteOverlayAnim.interpolate({
+                      translateY: enrouteBarAnim.interpolate({
                         inputRange: [0, 1],
                         outputRange: [-8, 0],
                       }),
@@ -1890,17 +1949,14 @@ export default function DriverHomeScreen() {
                   <Text style={styles.enrouteHeaderBarTime}>{formatMinSec(enrouteRemainingSec)}</Text>
                 </View>
                 <Pressable
-                  onPress={() => {
-                    hapticLight();
-                    toggleEnrouteExpanded();
-                  }}
+                  onPress={() => { hapticLight(); setCurrentTripExpanded((prev) => !prev); }}
                   hitSlop={10}
                   style={styles.enrouteHeaderDropdownBtn}
                   accessibilityRole="button"
-                  accessibilityLabel={enrouteExpanded ? 'Collapse map' : 'Expand map'}
+                  accessibilityLabel={currentTripExpanded ? 'Hide trip details' : 'Show trip details'}
                 >
                   <Ionicons
-                    name={enrouteExpanded ? 'chevron-down' : 'chevron-up'}
+                    name={currentTripExpanded ? 'chevron-up' : 'chevron-down'}
                     size={18}
                     color="#ffffff"
                   />
@@ -1911,7 +1967,87 @@ export default function DriverHomeScreen() {
         </View>
       ) : null}
 
-      {!subScreen ? (
+      {!subScreen && showHomeChrome && currentTrip?.status === 'in_trip' && headerLayoutHeight > 0 ? (
+        <Animated.View
+          pointerEvents={currentTripExpanded ? 'box-none' : 'none'}
+          style={[
+            styles.enrouteDropdownPanel,
+            {
+              top: headerLayoutHeight,
+              opacity: enrouteDropdownAnim,
+              transform: [{
+                translateY: enrouteDropdownAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-10, 0],
+                }),
+              }],
+            },
+          ]}
+        >
+          <View style={[styles.currentTripSurface, { backgroundColor: ui.panelBg, borderColor: ui.border }]}>
+            <View style={styles.currentTripTopRow}>
+              <View style={styles.currentTripRiderMeta}>
+                <Text style={[styles.currentTripRiderName, { color: ui.text }]}>{currentTrip.riderName}</Text>
+                <Text style={[styles.currentTripMeta, { color: ui.textMuted }]}>{currentTrip.distance} • {currentTrip.fare} • {currentTrip.paymentLabel}</Text>
+              </View>
+              <View style={styles.currentTripContactActions}>
+                <Pressable
+                  style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
+                  onPress={() => { hapticLight(); Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`); }}
+                >
+                  <Ionicons name="call" size={17} color="#ffffff" />
+                </Pressable>
+                <Pressable
+                  style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
+                  onPress={() => { hapticLight(); Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`); }}
+                >
+                  <Ionicons name="chatbubble-ellipses" size={16} color="#ffffff" />
+                </Pressable>
+              </View>
+            </View>
+            <View style={[styles.routePill, { backgroundColor: ui.card }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ width: 10, alignItems: 'center' }}>
+                  <View style={[styles.routeDot, { backgroundColor: '#171717' }]} />
+                </View>
+                <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{currentTrip.pickup}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', paddingVertical: 6 }}>
+                <View style={{ width: 10, alignItems: 'center' }}>
+                  <View style={[styles.routeConnector, { backgroundColor: ui.textMuted, height: 22, opacity: 0.4 }]} />
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ width: 10, alignItems: 'center' }}>
+                  <View style={[styles.routeDot, { backgroundColor: '#FFD000' }]} />
+                </View>
+                <Text style={[styles.routePillText, { color: ui.text, flex: 1 }]} numberOfLines={1}>{currentTrip.dropoff}</Text>
+              </View>
+            </View>
+            <View style={styles.currentTripStageRow}>
+              {DRIVER_PROGRESS_STEPS.map((step, index) => {
+                const isActive = index <= progressIndex;
+                const isCurrent = currentTrip.status === step.key;
+                return (
+                  <View
+                    key={step.key}
+                    style={[styles.tripPhasePill, {
+                      backgroundColor: isCurrent ? '#FFD000' : isActive ? '#171717' : ui.card,
+                      borderColor: isCurrent ? '#FFD000' : isActive ? '#171717' : ui.border,
+                    }]}
+                  >
+                    <Text style={[styles.tripPhasePillText, {
+                      color: isCurrent ? '#171717' : isActive ? '#FFD000' : ui.textMuted,
+                    }]} numberOfLines={1}>{step.label}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        </Animated.View>
+      ) : null}
+
+      {!subScreen && !(showHomeChrome && currentTrip?.status === 'in_trip') ? (
       <SafeAreaView style={styles.overlaySafeArea} pointerEvents="box-none">
         <Animated.View
           style={[
@@ -1927,7 +2063,13 @@ export default function DriverHomeScreen() {
           {showHomeChrome ? <View style={[styles.sheetDragHandle, { backgroundColor: ui.border }]} {...driverSheetPanResponder.panHandlers} /> : null}
           {activeTab === 'settings' ? renderSettingsTab() : (
             <ScrollView
-              contentContainerStyle={[styles.content, showHomeChrome ? styles.contentHome : styles.contentFlat]}
+              ref={driverHomeScrollRef}
+              contentContainerStyle={[
+                styles.content,
+                showHomeChrome
+                  ? (currentTrip?.status === 'in_trip' ? styles.contentEnroute : styles.contentHome)
+                  : styles.contentFlat,
+              ]}
               showsVerticalScrollIndicator={false}
               scrollEnabled={!driverSheetMinimized}
               onScroll={(event) => {
@@ -2331,6 +2473,14 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  enrouteDropdownPanel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 6,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+  },
   enrouteHeaderBar: {
     marginTop: 10,
   },
@@ -2369,6 +2519,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  enrouteMapToggleBtn: {
+    position: 'absolute',
+    bottom: 14,
+    left: 0,
+    right: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
   },
   overlaySafeArea: {
     flex: 1,
@@ -3018,7 +3181,7 @@ const styles = StyleSheet.create({
     marginBottom: -2,
   },
   sheetHome: {
-    marginTop: 250,
+    marginTop: DRIVER_MAP_HEIGHT,
   },
   sheetFlat: {
     marginTop: 0,
@@ -3030,6 +3193,10 @@ const styles = StyleSheet.create({
   },
   contentHome: {
     paddingTop: 18,
+  },
+  contentEnroute: {
+    paddingTop: 10,
+    gap: 12,
   },
   contentFlat: {
     paddingTop: 28,
