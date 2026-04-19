@@ -40,6 +40,7 @@ export type ActiveTripState = {
   /** Vehicle seating (4 or 6) — shown on driver match UI. */
   seatingCapacity?: 4 | 6;
   driverName: string;
+  driverPhone?: string;
   driverCoordinate: LatLng;
   startedAtMs?: number;
   completedAtMs?: number;

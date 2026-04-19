@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useState } from 'react';
-import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View, type GestureResponderHandlers } from 'react-native';
 import { greyCarAsset } from '../../../assets/images';
 import { hapticMedium, hapticWarning } from '../../../lib/haptics';
 import type { MainScreenUi } from '../mainScreenUi';
@@ -104,6 +104,26 @@ export function RideDetailsBottomSheet({
 }: Props) {
   const [cancelModalVisible, setCancelModalVisible] = useState(false);
   const [selectedReason, setSelectedReason] = useState<TripCancelReason | null>(null);
+  const [showReceipt, setShowReceipt] = useState(false);
+
+  useEffect(() => {
+    if (trip.status !== 'completed') return;
+    const t = setTimeout(() => setShowReceipt(true), 700);
+    return () => clearTimeout(t);
+  }, [trip.status]);
+
+  const handleShareTrip = async () => {
+    hapticMedium();
+    const msg = `I'm on a Ridr trip!\n\nDriver: ${name} (${trip.plate} – ${trip.carDetails})\nFrom: ${trip.fromLabel || 'Pickup'}\nTo: ${trip.toLabel || 'Dropoff'}\nETA: ~${trip.etaMinutes} min`;
+    try { await Share.share({ message: msg, title: 'My Ridr Trip' }); } catch { /* cancelled */ }
+  };
+
+  type ChatMessage = { id: string; text: string; sender: 'me' | 'them'; ts: number };
+  const DRIVER_AUTO_REPLIES = ["I'm close, be there soon!", "Okay, heading your way.", "No problem!", "Almost there!"];
+  const [showDriverChat, setShowDriverChat] = useState(false);
+  const [driverChatInput, setDriverChatInput] = useState('');
+  const [driverChatMessages, setDriverChatMessages] = useState<ChatMessage[]>([]);
+  const driverChatScrollRef = useRef<ScrollView | null>(null);
 
   const name = trip.driverName ?? 'Driver';
   const initials = getInitials(name);
@@ -173,13 +193,51 @@ export function RideDetailsBottomSheet({
             </View>
 
             <View style={styles.driverActions}>
-              <View style={styles.actionBtn}>
+              <Pressable
+                style={styles.actionBtn}
+                onPress={() => {
+                  if (trip.driverPhone) {
+                    Linking.openURL(`tel:${trip.driverPhone}`);
+                  } else {
+                    Alert.alert('No number', 'Driver phone number is not available.');
+                  }
+                }}
+              >
                 <Ionicons name="call" size={18} color={ACCENT} />
-              </View>
-              <View style={styles.actionBtn}>
+              </Pressable>
+              <Pressable
+                style={styles.actionBtn}
+                onPress={() => setShowDriverChat(true)}
+              >
                 <Ionicons name="chatbubble-ellipses" size={16} color={ACCENT} />
-              </View>
+              </Pressable>
             </View>
+          </View>
+
+          <View style={[styles.divider, { backgroundColor: ui.divider }]} />
+
+          {/* Safety actions */}
+          <View style={styles.safetyRow}>
+            <Pressable
+              style={[styles.safetyBtn, { backgroundColor: isDark ? '#0f2019' : '#f0fdf4', borderColor: '#22c55e' }]}
+              onPress={handleShareTrip}
+            >
+              <Ionicons name="share-social-outline" size={16} color="#22c55e" />
+              <Text style={[styles.safetyBtnText, { color: '#22c55e' }]}>Share trip</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.safetyBtn, { backgroundColor: isDark ? '#2b0d0d' : '#fff1f1', borderColor: '#ef4444' }]}
+              onPress={() => {
+                hapticWarning();
+                Alert.alert('Emergency SOS', 'Call Jamaica Emergency Services (119)?', [
+                  { text: 'Call 119', style: 'destructive', onPress: () => Linking.openURL('tel:119') },
+                  { text: 'Cancel', style: 'cancel' },
+                ]);
+              }}
+            >
+              <Ionicons name="warning-outline" size={16} color="#ef4444" />
+              <Text style={[styles.safetyBtnText, { color: '#ef4444' }]}>Emergency</Text>
+            </Pressable>
           </View>
 
           <View style={[styles.divider, { backgroundColor: ui.divider }]} />
@@ -322,6 +380,152 @@ export function RideDetailsBottomSheet({
             </Pressable>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* ── Trip receipt modal ── */}
+      <Modal
+        visible={showReceipt}
+        animationType="slide"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setShowReceipt(false)}
+      >
+        <View style={receiptStyles.overlay}>
+          <View style={[receiptStyles.sheet, { backgroundColor: ui.cardBg }]}>
+            <View style={receiptStyles.handle} />
+            <View style={receiptStyles.checkCircle}>
+              <Ionicons name="checkmark" size={32} color="#ffffff" />
+            </View>
+            <Text style={[receiptStyles.title, { color: ui.text }]}>Trip Completed</Text>
+            <Text style={[receiptStyles.subtitle, { color: ui.textMuted }]}>
+              Safe travels! Here's your trip receipt.
+            </Text>
+            <View style={[receiptStyles.receiptCard, { backgroundColor: isDark ? '#1b1c20' : '#f9f9f9', borderColor: ui.divider }]}>
+              {([
+                { label: 'Driver', value: name },
+                { label: 'Vehicle', value: `${trip.plate} — ${trip.carDetails}` },
+                { label: 'From', value: trip.fromLabel || 'Pickup' },
+                { label: 'To', value: trip.toLabel || 'Dropoff' },
+                { label: 'Fare', value: trip.fareLabel ?? `$${trip.fareUsd.toFixed(2)}` },
+                { label: 'Payment', value: trip.paymentLabel ?? 'Card' },
+              ] as { label: string; value: string }[]).map((row, i, arr) => (
+                <React.Fragment key={row.label}>
+                  <View style={receiptStyles.receiptRow}>
+                    <Text style={[receiptStyles.receiptLabel, { color: ui.textMuted }]}>{row.label}</Text>
+                    <Text style={[receiptStyles.receiptValue, { color: ui.text }]} numberOfLines={1}>{row.value}</Text>
+                  </View>
+                  {i < arr.length - 1 ? <View style={[receiptStyles.receiptDivider, { backgroundColor: ui.divider }]} /> : null}
+                </React.Fragment>
+              ))}
+            </View>
+            <Pressable
+              style={receiptStyles.shareBtn}
+              onPress={async () => {
+                const msg = `Ridr Trip Receipt\n\nDriver: ${name} (${trip.plate})\nFrom: ${trip.fromLabel || 'Pickup'}\nTo: ${trip.toLabel || 'Dropoff'}\nFare: ${trip.fareLabel ?? `$${trip.fareUsd.toFixed(2)}`}`;
+                try { await Share.share({ message: msg }); } catch { /* cancelled */ }
+              }}
+            >
+              <Ionicons name="share-outline" size={18} color="#171717" />
+              <Text style={receiptStyles.shareBtnText}>Share Receipt</Text>
+            </Pressable>
+            <Pressable style={receiptStyles.closeBtn} onPress={() => setShowReceipt(false)}>
+              <Text style={[receiptStyles.closeBtnText, { color: ui.textMuted }]}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Driver chat modal ── */}
+      <Modal
+        visible={showDriverChat}
+        animationType="slide"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setShowDriverChat(false)}
+      >
+        <View style={chatStyles.overlay}>
+          <View style={[chatStyles.sheet, { backgroundColor: ui.cardBg }]}>
+            {/* Header */}
+            <View style={[chatStyles.header, { backgroundColor: ui.cardBg, borderBottomColor: ui.divider }]}>
+              <Pressable style={chatStyles.headerSide} onPress={() => setShowDriverChat(false)} hitSlop={8}>
+                <Ionicons name="arrow-back" size={24} color={ui.text} />
+              </Pressable>
+              <Text style={[chatStyles.headerTitle, { color: ui.text }]}>Chat</Text>
+              <View style={chatStyles.headerSide} />
+            </View>
+
+            <KeyboardAvoidingView
+              style={{ flex: 1 }}
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            >
+              {/* Messages */}
+              <ScrollView
+                ref={driverChatScrollRef}
+                style={chatStyles.messageList}
+                contentContainerStyle={chatStyles.messageListContent}
+                onContentSizeChange={() => driverChatScrollRef.current?.scrollToEnd({ animated: true })}
+                keyboardShouldPersistTaps="handled"
+              >
+              {driverChatMessages.length === 0 ? (
+                <Text style={[chatStyles.emptyText, { color: ui.textMuted }]}>
+                  No messages yet. Say hello!
+                </Text>
+              ) : (
+                driverChatMessages.map((msg) => (
+                  <View key={msg.id} style={[chatStyles.messageRow, msg.sender === 'me' ? chatStyles.messageRowMe : chatStyles.messageRowThem]}>
+                    <Text style={[chatStyles.senderLabel, { color: ui.textMuted }]}>
+                      {msg.sender === 'me' ? 'You' : name}
+                    </Text>
+                    <Text style={[chatStyles.messageText, { color: ui.text }]}>
+                      {msg.text}
+                    </Text>
+                  </View>
+                ))
+              )}
+              </ScrollView>
+
+              {/* Input */}
+              <View style={[chatStyles.inputRow, { borderTopColor: ui.divider, backgroundColor: ui.cardBg }]}>
+              <TextInput
+                style={[chatStyles.textInput, { backgroundColor: ui.divider, color: ui.text }]}
+                placeholder="Message…"
+                placeholderTextColor={ui.textMuted}
+                value={driverChatInput}
+                onChangeText={setDriverChatInput}
+                returnKeyType="send"
+                onSubmitEditing={() => {
+                  const text = driverChatInput.trim();
+                  if (!text) return;
+                  const myMsg: ChatMessage = { id: String(Date.now()), text, sender: 'me', ts: Date.now() };
+                  setDriverChatMessages((prev) => [...prev, myMsg]);
+                  setDriverChatInput('');
+                  setTimeout(() => {
+                    const reply = DRIVER_AUTO_REPLIES[Math.floor(Math.random() * DRIVER_AUTO_REPLIES.length)];
+                    setDriverChatMessages((prev) => [...prev, { id: String(Date.now() + 1), text: reply, sender: 'them', ts: Date.now() }]);
+                  }, 1200);
+                }}
+              />
+              <Pressable
+                style={[chatStyles.sendBtn, { opacity: driverChatInput.trim() ? 1 : 0.4 }]}
+                disabled={!driverChatInput.trim()}
+                onPress={() => {
+                  const text = driverChatInput.trim();
+                  if (!text) return;
+                  const myMsg: ChatMessage = { id: String(Date.now()), text, sender: 'me', ts: Date.now() };
+                  setDriverChatMessages((prev) => [...prev, myMsg]);
+                  setDriverChatInput('');
+                  setTimeout(() => {
+                    const reply = DRIVER_AUTO_REPLIES[Math.floor(Math.random() * DRIVER_AUTO_REPLIES.length)];
+                    setDriverChatMessages((prev) => [...prev, { id: String(Date.now() + 1), text: reply, sender: 'them', ts: Date.now() }]);
+                  }, 1200);
+                }}
+              >
+                <Ionicons name="send" size={20} color="#ffffff" />
+              </Pressable>
+            </View>
+            </KeyboardAvoidingView>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -588,6 +792,26 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#ef4444',
   },
+  safetyRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  safetyBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  safetyBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
 });
 
 const cancelStyles = StyleSheet.create({
@@ -690,4 +914,162 @@ const cancelStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+});
+
+const chatStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+  },
+  sheet: {
+    flex: 1,
+    paddingBottom: 24,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 56,
+    paddingHorizontal: 4,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerSide: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  messageList: {
+    flex: 1,
+  },
+  messageListContent: {
+    padding: 16,
+    gap: 14,
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginTop: 48,
+    fontSize: 14,
+    opacity: 0.6,
+  },
+  messageRow: {
+    gap: 2,
+    maxWidth: '75%',
+  },
+  messageRowMe: {
+    alignSelf: 'flex-end',
+    alignItems: 'flex-end',
+    backgroundColor: 'rgba(123,142,247,0.25)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderBottomRightRadius: 4,
+  },
+  messageRowThem: {
+    alignSelf: 'flex-start',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(123,142,247,0.15)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderBottomLeftRadius: 4,
+  },
+  senderLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 1,
+  },
+  messageText: {
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  textInput: {
+    flex: 1,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 15,
+  },
+  sendBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#7b8ef7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
+
+const receiptStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 40,
+    alignItems: 'center',
+  },
+  handle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#ccc',
+    marginBottom: 20,
+  },
+  checkCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  title: { fontSize: 22, fontWeight: '800', marginBottom: 4 },
+  subtitle: { fontSize: 13, fontWeight: '500', marginBottom: 20, textAlign: 'center' },
+  receiptCard: {
+    width: '100%',
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  receiptRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  receiptLabel: { fontSize: 13, fontWeight: '500' },
+  receiptValue: { fontSize: 13, fontWeight: '700', maxWidth: '55%', textAlign: 'right' },
+  receiptDivider: { height: StyleSheet.hairlineWidth },
+  shareBtn: {
+    width: '100%',
+    backgroundColor: '#FFD000',
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  shareBtnText: { fontSize: 15, fontWeight: '800', color: '#171717' },
+  closeBtn: { paddingVertical: 10, alignItems: 'center' },
+  closeBtnText: { fontSize: 14, fontWeight: '600' },
 });

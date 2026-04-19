@@ -3309,7 +3309,7 @@ export default function MainScreen() {
       >
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFillObject, { backgroundColor: ui.panelBg, borderTopLeftRadius: 28, borderTopRightRadius: 28 }]}
+          style={[StyleSheet.absoluteFillObject, { backgroundColor: ui.panelBg }]}
         />
       
       {presentRide ? (

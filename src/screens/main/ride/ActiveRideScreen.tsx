@@ -1,7 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
+  Linking,
+  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -27,6 +30,16 @@ type Props = {
   onEndTrip: () => void;
   onCancelRide?: (reason: import('./activeTripTypes').TripCancelReason, fee: number) => void;
 };
+
+function metersBetween(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number }
+): number {
+  const dLat = (b.latitude - a.latitude) * 111320;
+  const avgLat = ((a.latitude + b.latitude) / 2) * (Math.PI / 180);
+  const dLng = (b.longitude - a.longitude) * 111320 * Math.cos(avgLat);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
 
 function nearestRouteIndex(
   route: ActiveTripState['routeCoords'],
@@ -56,6 +69,14 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
   const totalEtaSec = Math.max(60, trip.etaMinutes * 60);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [mapBottomPad, setMapBottomPad] = useState(MAP_PAD_EXPANDED);
+
+  // ── Safety state ──
+  const [showVehicleConfirm, setShowVehicleConfirm] = useState(
+    trip.status === 'matched' || trip.status === 'driver_arriving'
+  );
+  const stationaryRef = useRef<{ step: number; frozenSince: number }>({ step: -1, frozenSince: Date.now() });
+  const [stationaryAlerted, setStationaryAlerted] = useState(false);
+  const deviationAlertedRef = useRef(false);
 
   const etaCountdownSec = Math.max(0, totalEtaSec - elapsedSec);
 
@@ -168,6 +189,53 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
     return () => clearInterval(interval);
   }, [totalEtaSec, trip.id]);
 
+  // Stationary alert — if driver hasn't advanced during in_trip for ≥5 min
+  useEffect(() => {
+    if (trip.status !== 'in_trip' || isStopWindow(elapsedSec)) {
+      if (stationaryRef.current.step !== driverStep) {
+        stationaryRef.current = { step: driverStep, frozenSince: Date.now() };
+      }
+      return;
+    }
+    if (driverStep !== stationaryRef.current.step) {
+      stationaryRef.current = { step: driverStep, frozenSince: Date.now() };
+      return;
+    }
+    if (!stationaryAlerted && Date.now() - stationaryRef.current.frozenSince >= 5 * 60 * 1000) {
+      setStationaryAlerted(true);
+      Alert.alert(
+        'Driver Not Moving',
+        'Your driver has been stationary for over 5 minutes. Would you like to contact them or get help?',
+        [
+          { text: 'Call driver', onPress: () => { if (trip.driverPhone) Linking.openURL(`tel:${trip.driverPhone}`); } },
+          { text: 'Emergency (119)', style: 'destructive', onPress: () => Linking.openURL('tel:119') },
+          { text: 'Dismiss', style: 'cancel' },
+        ]
+      );
+    }
+  }, [driverStep, elapsedSec, trip.status, trip.driverPhone, stationaryAlerted]);
+
+  // Route deviation alert — if driver strays >300m from the expected route
+  useEffect(() => {
+    if (trip.status !== 'in_trip' || deviationAlertedRef.current || trip.routeCoords.length < 2) return;
+    const minDist = trip.routeCoords.reduce((min, coord) => {
+      const d = metersBetween(liveDriverCoordinate, coord);
+      return d < min ? d : min;
+    }, Infinity);
+    if (minDist > 300) {
+      deviationAlertedRef.current = true;
+      Alert.alert(
+        'Route Deviation Detected',
+        'Your driver appears to have left the expected route. Stay alert and contact your driver if needed.',
+        [
+          { text: 'Call driver', onPress: () => { if (trip.driverPhone) Linking.openURL(`tel:${trip.driverPhone}`); } },
+          { text: 'Emergency SOS', style: 'destructive', onPress: () => Linking.openURL('tel:119') },
+          { text: 'OK', style: 'cancel' },
+        ]
+      );
+    }
+  }, [liveDriverCoordinate, trip.status, trip.routeCoords, trip.driverPhone]);
+
   const remainingSec = Math.max(0, totalEtaSec - elapsedSec);
   const liveEtaMin = Math.max(0, Math.ceil(remainingSec / 60));
   const driverStatus =
@@ -271,6 +339,69 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
         <View style={styles.headerSpacer} />
       </View>
 
+      {/* SOS floating button */}
+      {trip.status !== 'completed' && trip.status !== 'cancelled' ? (
+        <Pressable
+          style={securityStyles.sosFloat}
+          onPress={() =>
+            Alert.alert(
+              'Emergency SOS',
+              'This will call Jamaica Emergency Services (119). Continue?',
+              [
+                { text: 'Call 119', style: 'destructive', onPress: () => Linking.openURL('tel:119') },
+                { text: 'Cancel', style: 'cancel' },
+              ]
+            )
+          }
+        >
+          <Ionicons name="warning" size={18} color="#ffffff" />
+          <Text style={securityStyles.sosBtnText}>SOS</Text>
+        </Pressable>
+      ) : null}
+
+      {/* Vehicle confirmation modal */}
+      <Modal
+        visible={showVehicleConfirm}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setShowVehicleConfirm(false)}
+      >
+        <View style={securityStyles.overlay}>
+          <View style={[securityStyles.vehicleModal, { backgroundColor: ui.cardBg }]}>
+            <Ionicons name="shield-checkmark-outline" size={40} color="#22c55e" style={{ marginBottom: 10 }} />
+            <Text style={[securityStyles.vehicleTitle, { color: ui.text }]}>Verify Your Driver</Text>
+            <Text style={[securityStyles.vehicleSub, { color: ui.textMuted }]}>
+              Before entering the vehicle, confirm these details match the car that has arrived:
+            </Text>
+            <View style={[securityStyles.vehicleDetail, { backgroundColor: isDark ? '#1b1c20' : '#f5f5f7' }]}>
+              <Text style={[securityStyles.vehiclePlate, { color: ui.text }]}>{trip.plate}</Text>
+              <Text style={[securityStyles.vehicleModel, { color: ui.textMuted }]}>{trip.carDetails}</Text>
+            </View>
+            <Pressable style={securityStyles.confirmBtn} onPress={() => setShowVehicleConfirm(false)}>
+              <Text style={securityStyles.confirmBtnText}>✓ This is my driver</Text>
+            </Pressable>
+            <Pressable
+              style={securityStyles.wrongBtn}
+              onPress={() => {
+                setShowVehicleConfirm(false);
+                Alert.alert(
+                  'Wrong Vehicle?',
+                  'Do not enter the vehicle. Contact support or call emergency services.',
+                  [
+                    { text: 'Call Support', onPress: () => Linking.openURL('tel:18761234567') },
+                    { text: 'Call 119', style: 'destructive', onPress: () => Linking.openURL('tel:119') },
+                    { text: 'Cancel', style: 'cancel' },
+                  ]
+                );
+              }}
+            >
+              <Text style={securityStyles.wrongBtnText}>✗ Wrong vehicle or driver</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <Animated.View
         style={[
           styles.rideSheet,
@@ -361,5 +492,99 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 2,
     borderColor: '#ffffff',
+  },
+});
+
+const securityStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  vehicleModal: {
+    width: '100%',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+  },
+  vehicleTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  vehicleSub: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 18,
+    lineHeight: 20,
+  },
+  vehicleDetail: {
+    width: '100%',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 20,
+    gap: 6,
+  },
+  vehiclePlate: {
+    fontSize: 32,
+    fontWeight: '900',
+    letterSpacing: 3,
+  },
+  vehicleModel: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  confirmBtn: {
+    width: '100%',
+    backgroundColor: '#22c55e',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  confirmBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  wrongBtn: {
+    width: '100%',
+    backgroundColor: '#ef4444',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  wrongBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  sosFloat: {
+    position: 'absolute',
+    right: 16,
+    top: Platform.OS === 'ios' ? 108 : 70,
+    backgroundColor: '#ef4444',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    zIndex: 20,
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  sosBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 1,
   },
 });

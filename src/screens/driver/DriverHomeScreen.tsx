@@ -10,6 +10,7 @@ import {
   Alert,
   Animated,
   Dimensions,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   PanResponder,
@@ -81,6 +82,7 @@ type DriverSubScreen =
 type IncomingRequest = {
   id: string;
   riderName: string;
+  riderPhone?: string;
   pickup: string;
   pickupCoordinate: LatLng;
   dropoff: string;
@@ -114,6 +116,7 @@ const incomingRequestsSeed: IncomingRequest[] = [
   {
     id: 'req-1',
     riderName: 'Alicia R.',
+    riderPhone: '+18761234567',
     pickup: 'Half-Way Tree Transport Centre',
     pickupCoordinate: { latitude: 18.0062, longitude: -76.7971 },
     dropoff: 'Norman Manley Airport',
@@ -126,6 +129,7 @@ const incomingRequestsSeed: IncomingRequest[] = [
   {
     id: 'req-2',
     riderName: 'Devon P.',
+    riderPhone: '+18767654321',
     pickup: 'New Kingston',
     pickupCoordinate: { latitude: 18.0081, longitude: -76.7832 },
     dropoff: 'Portmore Mall',
@@ -138,6 +142,7 @@ const incomingRequestsSeed: IncomingRequest[] = [
   {
     id: 'req-3',
     riderName: 'Melissa W.',
+    riderPhone: '+18769876543',
     pickup: 'Liguanea',
     pickupCoordinate: { latitude: 18.0137, longitude: -76.7474 },
     dropoff: 'Downtown Kingston',
@@ -384,6 +389,9 @@ export default function DriverHomeScreen() {
   const requestSoundRef = useRef<Audio.Sound | null>(null);
   const pinInputRef = useRef<TextInput>(null);
   const driverSheetPan = useRef(new Animated.Value(0)).current;
+  // Safety refs
+  const speedAlertShownRef = useRef(false);
+  const tripTimeoutShownRef = useRef(false);
   const driverSheetOffset = useRef(new Animated.Value(0)).current;
   const driverSheetTranslateY = useMemo(
     () => Animated.add(driverSheetPan, driverSheetOffset),
@@ -445,6 +453,13 @@ export default function DriverHomeScreen() {
   const [homeMapRouteCoords, setHomeMapRouteCoords] = useState<LatLng[]>([]);
   const [requestModalRouteCoords, setRequestModalRouteCoords] = useState<LatLng[]>([]);
   const [driverLiveLocation, setDriverLiveLocation] = useState<LatLng | null>(null);
+
+  type ChatMessage = { id: string; text: string; sender: 'me' | 'them'; ts: number };
+  const RIDER_AUTO_REPLIES = ["On my way!", "Thanks, I'll be right there.", "Okay, I can see you.", "Got it, thanks!"];
+  const [showRiderChat, setShowRiderChat] = useState(false);
+  const [riderChatInput, setRiderChatInput] = useState('');
+  const [riderChatMessages, setRiderChatMessages] = useState<ChatMessage[]>([]);
+  const riderChatScrollRef = useRef<ScrollView | null>(null);
 
   const ui = useMemo(
     () => ({
@@ -775,6 +790,16 @@ export default function DriverHomeScreen() {
               latitude: loc.coords.latitude,
               longitude: loc.coords.longitude,
             });
+            // Speed alert — >120 km/h (33.3 m/s)
+            const speed = loc.coords.speed ?? -1;
+            if (speed > 33.3 && !speedAlertShownRef.current) {
+              speedAlertShownRef.current = true;
+              Alert.alert(
+                'Speed Warning',
+                'You are travelling over 120 km/h. Please slow down for passenger safety.',
+                [{ text: 'Got it' }]
+              );
+            }
           }
         );
       } catch {
@@ -786,6 +811,32 @@ export default function DriverHomeScreen() {
       subscription?.remove();
     };
   }, [showHomeChrome]);
+
+  // Reset speed alert when a new trip starts
+  useEffect(() => {
+    speedAlertShownRef.current = false;
+  }, [currentTrip?.id]);
+
+  // Trip timeout guard — alert if in_trip for >60 minutes
+  useEffect(() => {
+    tripTimeoutShownRef.current = false;
+    const interval = setInterval(() => {
+      if (tripTimeoutShownRef.current) return;
+      const elapsedMin = (Date.now() - currentTrip.startedAtMs!) / 60000;
+      if (elapsedMin >= 60) {
+        tripTimeoutShownRef.current = true;
+        Alert.alert(
+          'Long Trip Alert',
+          `This trip has been active for over ${Math.floor(elapsedMin)} minutes. Is everything okay?`,
+          [
+            { text: 'All good', style: 'cancel' },
+            { text: 'Emergency (119)', style: 'destructive', onPress: () => Linking.openURL('tel:119') },
+          ]
+        );
+      }
+    }, 60 * 1000);
+    return () => clearInterval(interval);
+  }, [currentTrip?.id, currentTrip?.status, currentTrip?.startedAtMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2139,13 +2190,20 @@ export default function DriverHomeScreen() {
               <View style={styles.currentTripContactActions}>
                 <Pressable
                   style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
-                  onPress={() => { hapticLight(); Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`); }}
+                  onPress={() => {
+                    hapticLight();
+                    if (currentTrip.riderPhone) {
+                      Linking.openURL(`tel:${currentTrip.riderPhone}`);
+                    } else {
+                      Alert.alert('No number', 'Rider phone number is not available.');
+                    }
+                  }}
                 >
                   <Ionicons name="call" size={17} color="#ffffff" />
                 </Pressable>
                 <Pressable
                   style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
-                  onPress={() => { hapticLight(); Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`); }}
+                  onPress={() => { hapticLight(); setShowRiderChat(true); }}
                 >
                   <Ionicons name="chatbubble-ellipses" size={16} color="#ffffff" />
                 </Pressable>
@@ -2174,18 +2232,23 @@ export default function DriverHomeScreen() {
               {DRIVER_PROGRESS_STEPS.map((step, index) => {
                 const isActive = index <= progressIndex;
                 const isCurrent = currentTrip.status === step.key;
+                const isCompletedPill = step.key === 'completed';
                 return (
-                  <View
+                  <Pressable
                     key={step.key}
                     style={[styles.tripPhasePill, {
                       backgroundColor: isCurrent ? '#FFD000' : isActive ? '#171717' : ui.card,
                       borderColor: isCurrent ? '#FFD000' : isActive ? '#171717' : ui.border,
+                      opacity: isCompletedPill ? 1 : 1,
                     }]}
+                    onPress={() => {
+                      if (isCompletedPill) { hapticMedium(); advanceTrip(); }
+                    }}
                   >
                     <Text style={[styles.tripPhasePillText, {
                       color: isCurrent ? '#171717' : isActive ? '#FFD000' : ui.textMuted,
                     }]} numberOfLines={1}>{step.label}</Text>
-                  </View>
+                  </Pressable>
                 );
               })}
             </View>
@@ -2689,6 +2752,101 @@ export default function DriverHomeScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* ── Rider chat modal ── */}
+      <Modal
+        visible={showRiderChat}
+        animationType="slide"
+        transparent
+        statusBarTranslucent
+        onRequestClose={() => setShowRiderChat(false)}
+      >
+        <View style={chatModalStyles.overlay}>
+          <View style={[chatModalStyles.sheet, { backgroundColor: ui.panelBg }]}>
+            {/* Header */}
+            <View style={[chatModalStyles.header, { backgroundColor: ui.panelBg, borderBottomColor: ui.border }]}>
+              <Pressable style={chatModalStyles.headerSide} onPress={() => setShowRiderChat(false)} hitSlop={8}>
+                <Ionicons name="arrow-back" size={24} color={ui.text} />
+              </Pressable>
+              <Text style={[chatModalStyles.headerTitle, { color: ui.text }]}>Chat</Text>
+              <View style={chatModalStyles.headerSide} />
+            </View>
+
+            <KeyboardAvoidingView
+              style={{ flex: 1 }}
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            >
+              {/* Messages */}
+              <ScrollView
+                ref={riderChatScrollRef}
+                style={chatModalStyles.messageList}
+                contentContainerStyle={chatModalStyles.messageListContent}
+                onContentSizeChange={() => riderChatScrollRef.current?.scrollToEnd({ animated: true })}
+                keyboardShouldPersistTaps="handled"
+              >
+              {riderChatMessages.length === 0 ? (
+                <Text style={[chatModalStyles.emptyText, { color: ui.textMuted }]}>
+                  No messages yet. Say hello!
+                </Text>
+              ) : (
+                riderChatMessages.map((msg) => (
+                  <View key={msg.id} style={[chatModalStyles.messageRow, msg.sender === 'me' ? chatModalStyles.messageRowMe : chatModalStyles.messageRowThem]}>
+                    <Text style={[chatModalStyles.senderLabel, { color: ui.textMuted }]}>
+                      {msg.sender === 'me' ? 'You' : currentTrip?.riderName ?? 'Rider'}
+                    </Text>
+                    <Text style={[chatModalStyles.messageText, { color: ui.text }]}>
+                      {msg.text}
+                    </Text>
+                  </View>
+                ))
+              )}
+              </ScrollView>
+
+              {/* Input */}
+              <View style={[chatModalStyles.inputRow, { borderTopColor: ui.border, backgroundColor: ui.panelBg }]}>
+              <TextInput
+                style={[chatModalStyles.textInput, { backgroundColor: isDark ? '#2a2a2a' : '#f0f0f0', color: ui.text }]}
+                placeholder="Message…"
+                placeholderTextColor={ui.textMuted}
+                value={riderChatInput}
+                onChangeText={setRiderChatInput}
+                returnKeyType="send"
+                onSubmitEditing={() => {
+                  const text = riderChatInput.trim();
+                  if (!text) return;
+                  const myMsg: ChatMessage = { id: String(Date.now()), text, sender: 'me', ts: Date.now() };
+                  setRiderChatMessages((prev) => [...prev, myMsg]);
+                  setRiderChatInput('');
+                  hapticLight();
+                  setTimeout(() => {
+                    const reply = RIDER_AUTO_REPLIES[Math.floor(Math.random() * RIDER_AUTO_REPLIES.length)];
+                    setRiderChatMessages((prev) => [...prev, { id: String(Date.now() + 1), text: reply, sender: 'them', ts: Date.now() }]);
+                  }, 1200);
+                }}
+              />
+              <Pressable
+                style={[chatModalStyles.sendBtn, { opacity: riderChatInput.trim() ? 1 : 0.4 }]}
+                disabled={!riderChatInput.trim()}
+                onPress={() => {
+                  const text = riderChatInput.trim();
+                  if (!text) return;
+                  const myMsg: ChatMessage = { id: String(Date.now()), text, sender: 'me', ts: Date.now() };
+                  setRiderChatMessages((prev) => [...prev, myMsg]);
+                  setRiderChatInput('');
+                  hapticLight();
+                  setTimeout(() => {
+                    const reply = RIDER_AUTO_REPLIES[Math.floor(Math.random() * RIDER_AUTO_REPLIES.length)];
+                    setRiderChatMessages((prev) => [...prev, { id: String(Date.now() + 1), text: reply, sender: 'them', ts: Date.now() }]);
+                  }, 1200);
+                }}
+              >
+                <Ionicons name="send" size={20} color="#ffffff" />
+              </Pressable>
+            </View>
+            </KeyboardAvoidingView>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -4294,5 +4452,102 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 10,
     alignSelf: 'flex-end',
+  },
+});
+
+const chatModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+  },
+  sheet: {
+    flex: 1,
+    paddingBottom: 24,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 56,
+    paddingHorizontal: 4,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerSide: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  messageList: {
+    flex: 1,
+  },
+  messageListContent: {
+    padding: 16,
+    gap: 14,
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginTop: 48,
+    fontSize: 14,
+    opacity: 0.6,
+  },
+  messageRow: {
+    gap: 2,
+    maxWidth: '75%',
+  },
+  messageRowMe: {
+    alignSelf: 'flex-end',
+    alignItems: 'flex-end',
+    backgroundColor: 'rgba(123,142,247,0.25)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderBottomRightRadius: 4,
+  },
+  messageRowThem: {
+    alignSelf: 'flex-start',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(123,142,247,0.15)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderBottomLeftRadius: 4,
+  },
+  senderLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 1,
+  },
+  messageText: {
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  textInput: {
+    flex: 1,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 15,
+  },
+  sendBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#7b8ef7',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
