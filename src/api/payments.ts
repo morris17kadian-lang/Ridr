@@ -1,6 +1,6 @@
 import { apiRequest } from './http';
 
-/** PowerTranz-style card payload for `/payments/tokenize` */
+/** PowerTranz-style card payload for `/payments/powertranz/tokenize` */
 export type PaymentsTokenizeSource = {
   CardPan: string;
   CardCvv: string;
@@ -9,7 +9,7 @@ export type PaymentsTokenizeSource = {
   CardholderName: string;
 };
 
-/** Body for `POST /payments/tokenize` (field names match gateway JSON). */
+/** Body for `POST /payments/powertranz/tokenize` (field names match gateway JSON). */
 export type PaymentsTokenizeRequest = {
   TransactionIdentifier: string;
   TotalAmount: number;
@@ -23,7 +23,7 @@ export type PaymentsTokenizeRequest = {
 };
 
 export async function postPaymentsTokenize(body: PaymentsTokenizeRequest): Promise<unknown> {
-  return apiRequest<unknown>('/payments/tokenize', {
+  return apiRequest<unknown>('/payments/powertranz/tokenize', {
     method: 'POST',
     json: body,
     auth: true,

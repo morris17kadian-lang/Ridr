@@ -30,9 +30,11 @@ import {
   createPaymentMethod,
   deletePaymentMethod,
   listPaymentMethods,
+  listMyRideRequests,
   paymentMethodToDisplay,
   updatePaymentMethod,
 } from '../../api';
+import type { RideRequestDto } from '../../api/rides';
 import { ensureDriverLocationReady } from '../../lib/driverLocationRequirement';
 import { fetchDrivingRouteCoords } from '../../lib/directionsRoute';
 import { clearAppCache } from '../../lib/appCacheStorage';
@@ -112,56 +114,44 @@ const DRIVER_PROGRESS_STEPS: Array<{ key: DriverTripStatus; label: string }> = [
   { key: 'completed', label: 'Completed' },
 ];
 
-const incomingRequestsSeed: IncomingRequest[] = [
-  {
-    id: 'req-1',
-    riderName: 'Alicia R.',
-    riderPhone: '+18761234567',
-    pickup: 'Half-Way Tree Transport Centre',
-    pickupCoordinate: { latitude: 18.0062, longitude: -76.7971 },
-    dropoff: 'Norman Manley Airport',
-    dropoffCoordinate: { latitude: 17.936, longitude: -76.7875 },
-    fare: 'J$3,450',
-    eta: '4 min away',
-    distance: '12.4 km',
-    paymentLabel: 'Card',
-  },
-  {
-    id: 'req-2',
-    riderName: 'Devon P.',
-    riderPhone: '+18767654321',
-    pickup: 'New Kingston',
-    pickupCoordinate: { latitude: 18.0081, longitude: -76.7832 },
-    dropoff: 'Portmore Mall',
-    dropoffCoordinate: { latitude: 17.9505, longitude: -76.8828 },
-    fare: 'J$2,180',
-    eta: '7 min away',
-    distance: '8.1 km',
-    paymentLabel: 'Cash',
-  },
-  {
-    id: 'req-3',
-    riderName: 'Melissa W.',
-    riderPhone: '+18769876543',
-    pickup: 'Liguanea',
-    pickupCoordinate: { latitude: 18.0137, longitude: -76.7474 },
-    dropoff: 'Downtown Kingston',
-    dropoffCoordinate: { latitude: 17.977, longitude: -76.7915 },
-    fare: 'J$1,760',
-    eta: '3 min away',
-    distance: '5.6 km',
-    paymentLabel: 'Card',
-  },
-];
-
 type DemandLevel = 'critical' | 'high' | 'medium' | 'low';
 
-const completedTripsSeed = [
-  { id: 'done-1', riderName: 'Marsha B.', route: 'New Kingston to Barbican', fare: 'J$1,540', when: 'Today, 9:10 AM' },
-  { id: 'done-2', riderName: 'Kevin T.', route: 'Half-Way Tree to Portmore', fare: 'J$2,980', when: 'Today, 7:35 AM' },
-  { id: 'done-3', riderName: 'Alana P.', route: 'Liguanea to Downtown Kingston', fare: 'J$1,880', when: 'Yesterday, 6:20 PM' },
-];
-type CompletedTrip = (typeof completedTripsSeed)[number];
+type CompletedTrip = {
+  id: string;
+  riderName: string;
+  route: string;
+  fare: string;
+  when: string;
+};
+
+function ridePointToLatLng(point: RideRequestDto['pickup']): LatLng {
+  const [lng, lat] = point.coordinates;
+  return { latitude: lat, longitude: lng };
+}
+
+function rideFareLabel(dto: RideRequestDto): string {
+  const fare = dto.pricing?.estimatedFare;
+  if (typeof fare === 'number' && Number.isFinite(fare)) {
+    return `J$${Math.round(fare).toLocaleString()}`;
+  }
+  return 'J$0';
+}
+
+function rideEtaLabel(dto: RideRequestDto): string {
+  const sec = dto.route?.durationSeconds;
+  if (typeof sec === 'number' && Number.isFinite(sec) && sec > 0) {
+    return `${Math.max(1, Math.round(sec / 60))} min away`;
+  }
+  return '—';
+}
+
+function rideDistanceLabel(dto: RideRequestDto): string {
+  const meters = dto.route?.distanceMeters;
+  if (typeof meters === 'number' && Number.isFinite(meters) && meters > 0) {
+    return `${(meters / 1000).toFixed(1)} km`;
+  }
+  return '—';
+}
 
 function splitTripRoute(route: string): { from: string; to: string | null } {
   const parts = route.split(' to ');
@@ -258,6 +248,47 @@ const DRIVER_SHEET_PEEK = 148;
 const DRIVER_SHEET_MINIMIZED_OFFSET = Math.max(0, SCREEN_HEIGHT - DRIVER_MAP_HEIGHT - DRIVER_SHEET_PEEK);
 /** Upper bound of sheet translate used for map height interpolation (avoid [0,0] inputRange). */
 const DRIVER_SHEET_SLIDE_RANGE = Math.max(1, DRIVER_SHEET_MINIMIZED_OFFSET);
+
+function segmentMeters(a: LatLng, b: LatLng): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLng = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function pointAlongPolyline(coords: LatLng[], progress01: number): LatLng {
+  if (coords.length < 2) return coords[0] ?? KSA_MAP_CENTER;
+  const lengths: number[] = [];
+  let total = 0;
+  for (let i = 1; i < coords.length; i += 1) {
+    const len = segmentMeters(coords[i - 1], coords[i]);
+    lengths.push(len);
+    total += len;
+  }
+  if (total <= 0) return coords[0];
+  const target = Math.max(0, Math.min(1, progress01)) * total;
+  let walked = 0;
+  for (let i = 0; i < lengths.length; i += 1) {
+    const len = lengths[i];
+    if (walked + len >= target) {
+      const t = len <= 0 ? 0 : (target - walked) / len;
+      const a = coords[i];
+      const b = coords[i + 1];
+      return {
+        latitude: a.latitude + (b.latitude - a.latitude) * t,
+        longitude: a.longitude + (b.longitude - a.longitude) * t,
+      };
+    }
+    walked += len;
+  }
+  return coords[coords.length - 1];
+}
 
 type SwipeToActionProps = {
   onAccept: () => void;
@@ -364,10 +395,10 @@ export default function DriverHomeScreen() {
   type EarningsModal = null | 'earnings' | 'trips' | 'rating';
   const [earningsModal, setEarningsModal] = useState<EarningsModal>(null);
   const [selectedTripDetail, setSelectedTripDetail] = useState<CompletedTrip | null>(null);
-  const [completedTrips, setCompletedTrips] = useState<CompletedTrip[]>(completedTripsSeed);
-  const [availableCashOutAmount, setAvailableCashOutAmount] = useState(12430);
-  const [cashOutAmountInput, setCashOutAmountInput] = useState<string>(() => (12430).toLocaleString());
-  const [incomingRequests, setIncomingRequests] = useState(incomingRequestsSeed);
+  const [completedTrips, setCompletedTrips] = useState<CompletedTrip[]>([]);
+  const [availableCashOutAmount, setAvailableCashOutAmount] = useState(0);
+  const [cashOutAmountInput, setCashOutAmountInput] = useState<string>('0');
+  const [incomingRequests, setIncomingRequests] = useState<IncomingRequest[]>([]);
   const [requestModalVisible, setRequestModalVisible] = useState(false);
   const [currentTrip, setCurrentTrip] = useState<DriverTrip | null>(null);
   const [currentTripExpanded, setCurrentTripExpanded] = useState(true);
@@ -410,10 +441,10 @@ export default function DriverHomeScreen() {
   const driverSheetMinimizedRef = useRef(false);
   const driverSheetEnabledRef = useRef(false);
   const driverScrollOffsetRef = useRef(0);
-  const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || 'Driver');
+  const [profileFirstName, setProfileFirstName] = useState(user?.firstName?.trim() || '');
   const [profileLastName, setProfileLastName] = useState(user?.lastName?.trim() || '');
-  const [profileEmail, setProfileEmail] = useState(user?.email ?? 'driver@ridr.app');
-  const [profileUsername, setProfileUsername] = useState(user?.staffCode ?? 'R001');
+  const [profileEmail, setProfileEmail] = useState(user?.email ?? '');
+  const [profileUsername, setProfileUsername] = useState(user?.staffCode ?? '');
   const [profilePhone, setProfilePhone] = useState('');
   const [countryCode, setCountryCode] = useState('+1');
   const [countryPickerVisible, setCountryPickerVisible] = useState(false);
@@ -458,6 +489,7 @@ export default function DriverHomeScreen() {
   const RIDER_AUTO_REPLIES = ["On my way!", "Thanks, I'll be right there.", "Okay, I can see you.", "Got it, thanks!"];
   const [showRiderChat, setShowRiderChat] = useState(false);
   const [riderChatInput, setRiderChatInput] = useState('');
+  const [ghostDriverProgress, setGhostDriverProgress] = useState(0);
   const [riderChatMessages, setRiderChatMessages] = useState<ChatMessage[]>([]);
   const riderChatScrollRef = useRef<ScrollView | null>(null);
 
@@ -648,11 +680,97 @@ export default function DriverHomeScreen() {
   );
 
   useEffect(() => {
-    setProfileFirstName(user?.firstName?.trim() || 'Driver');
+    setProfileFirstName(user?.firstName?.trim() || '');
     setProfileLastName(user?.lastName?.trim() || '');
-    setProfileEmail(user?.email ?? 'driver@ridr.app');
-    setProfileUsername(user?.staffCode ?? 'R001');
+    setProfileEmail(user?.email ?? '');
+    setProfileUsername(user?.staffCode ?? '');
   }, [user?.email, user?.firstName, user?.lastName, user?.staffCode]);
+
+  useEffect(() => {
+    if (!user) {
+      setIncomingRequests([]);
+      setCompletedTrips([]);
+      setCurrentTrip(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { rideRequests } = await listMyRideRequests();
+        if (cancelled) return;
+
+        const toIncomingRequest = (r: RideRequestDto): IncomingRequest => ({
+          id: r.id,
+          riderName: 'Rider',
+          pickup: r.pickup.address ?? 'Pickup',
+          pickupCoordinate: ridePointToLatLng(r.pickup),
+          dropoff: r.dropoff.address ?? 'Dropoff',
+          dropoffCoordinate: ridePointToLatLng(r.dropoff),
+          fare: rideFareLabel(r),
+          eta: rideEtaLabel(r),
+          distance: rideDistanceLabel(r),
+          paymentLabel: r.payment?.method === 'cash' ? 'Cash' : 'Card',
+        });
+
+        const toDriverStatus = (s: string): DriverTripStatus =>
+          s === 'matched'
+            ? 'matched'
+            : s === 'arrived'
+              ? 'arrived'
+              : s === 'completed'
+                ? 'completed'
+                : s === 'cancelled'
+                  ? 'cancelled'
+                  : 'in_trip';
+
+        const active = rideRequests.find((r) => ['matched', 'arrived', 'in_trip', 'in_progress'].includes(r.status));
+        if (active) {
+          const status = toDriverStatus(active.status);
+          const base = toIncomingRequest(active);
+          setCurrentTrip((prev) =>
+            prev && prev.id === active.id
+              ? prev
+              : {
+                  ...base,
+                  status,
+                  startPin: generateTripStartPin(),
+                  acceptedAtMs: Date.now(),
+                  ...(status === 'arrived' ? { arrivedAtMs: Date.now() } : {}),
+                  ...(status === 'in_trip' ? { startedAtMs: Date.now() } : {}),
+                }
+          );
+        } else {
+          setCurrentTrip(null);
+        }
+
+        const incoming = rideRequests
+          .filter((r) => ['searching', 'matched', 'arrived'].includes(r.status))
+          .map(toIncomingRequest)
+          .filter((r) => r.id !== active?.id);
+        setIncomingRequests(incoming);
+
+        const completed = rideRequests
+          .filter((r) => r.status === 'completed')
+          .slice(0, 20)
+          .map((r): CompletedTrip => ({
+            id: r.id,
+            riderName: 'Rider',
+            route: `${r.pickup.address ?? 'Pickup'} to ${r.dropoff.address ?? 'Dropoff'}`,
+            fare: rideFareLabel(r),
+            when: r.updatedAt ? new Date(r.updatedAt).toLocaleString() : '—',
+          }));
+        setCompletedTrips(completed);
+      } catch {
+        if (!cancelled) {
+          setIncomingRequests([]);
+          setCompletedTrips([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     setEditingFirstName(profileFirstName);
@@ -705,6 +823,36 @@ export default function DriverHomeScreen() {
 
   const mapPickup = currentTrip?.pickupCoordinate ?? incomingRequests[0]?.pickupCoordinate ?? KSA_MAP_CENTER;
   const mapDropoff = currentTrip?.dropoffCoordinate ?? incomingRequests[0]?.dropoffCoordinate ?? KSA_MAP_CENTER;
+  const mapRouteGuide = (() => {
+    if (currentTrip?.status === 'matched') {
+      return {
+        phase: 'pickup' as const,
+        title: 'Heading to pickup',
+        icon: 'person-outline' as const,
+        outerColor: '#4c1d95',
+        innerColor: '#a78bfa',
+        lineDashPattern: [12, 8] as number[],
+      };
+    }
+    if (currentTrip?.status === 'arrived' || currentTrip?.status === 'in_trip') {
+      return {
+        phase: 'dropoff' as const,
+        title: 'Heading to dropoff',
+        icon: 'flag-outline' as const,
+        outerColor: '#14532d',
+        innerColor: '#4ade80',
+        lineDashPattern: undefined,
+      };
+    }
+    return {
+      phase: 'idle' as const,
+      title: 'Route preview',
+      icon: 'navigate-outline' as const,
+      outerColor: ridrMapRouteStroke.outer,
+      innerColor: ridrMapRouteStroke.inner,
+      lineDashPattern: undefined,
+    };
+  })();
   const driverMarker =
     (driverLiveLocation ?? currentTrip?.pickupCoordinate) ?? {
       latitude: KSA_MAP_CENTER.latitude + 0.008,
@@ -757,9 +905,42 @@ export default function DriverHomeScreen() {
 
   const homeRoutePolylineCoords =
     homeMapRouteCoords.length > 1 ? homeMapRouteCoords : [drivingRouteContext.from, drivingRouteContext.to];
+  const routeLengthMeters = useMemo(() => {
+    if (homeRoutePolylineCoords.length < 2) return 0;
+    let total = 0;
+    for (let i = 1; i < homeRoutePolylineCoords.length; i += 1) {
+      total += segmentMeters(homeRoutePolylineCoords[i - 1], homeRoutePolylineCoords[i]);
+    }
+    return total;
+  }, [homeRoutePolylineCoords]);
+  const ghostDriverCoordinate = useMemo(() => {
+    if (!currentTrip || homeRoutePolylineCoords.length < 2) return null;
+    return pointAlongPolyline(homeRoutePolylineCoords, ghostDriverProgress);
+  }, [currentTrip, homeRoutePolylineCoords, ghostDriverProgress]);
   const hasDistinctPickupDrop =
     Math.abs(mapPickup.latitude - mapDropoff.latitude) > 1e-6 ||
     Math.abs(mapPickup.longitude - mapDropoff.longitude) > 1e-6;
+
+  useEffect(() => {
+    setGhostDriverProgress(0);
+  }, [currentTrip?.id, currentTrip?.status, routeFetchKeyFrom, routeFetchKeyTo]);
+
+  useEffect(() => {
+    if (!currentTrip || !showHomeChrome || routeLengthMeters <= 0) return;
+    const metersPerSecond = currentTrip.status === 'matched' ? 40 : currentTrip.status === 'arrived' ? 34 : 48;
+    let lastTs = Date.now();
+    const id = setInterval(() => {
+      const now = Date.now();
+      const dt = Math.max(0.15, (now - lastTs) / 1000);
+      lastTs = now;
+      const delta = (metersPerSecond * dt) / routeLengthMeters;
+      setGhostDriverProgress((prev) => {
+        const next = prev + delta;
+        return next >= 1 ? 1 : next;
+      });
+    }, 500);
+    return () => clearInterval(id);
+  }, [currentTrip?.id, currentTrip?.status, routeLengthMeters, showHomeChrome]);
 
   useEffect(() => {
     if (!showHomeChrome) {
@@ -822,7 +1003,8 @@ export default function DriverHomeScreen() {
     tripTimeoutShownRef.current = false;
     const interval = setInterval(() => {
       if (tripTimeoutShownRef.current) return;
-      const elapsedMin = (Date.now() - currentTrip.startedAtMs!) / 60000;
+      if (!currentTrip || currentTrip.status !== 'in_trip' || !currentTrip.startedAtMs) return;
+      const elapsedMin = (Date.now() - currentTrip.startedAtMs) / 60000;
       if (elapsedMin >= 60) {
         tripTimeoutShownRef.current = true;
         Alert.alert(
@@ -921,6 +1103,34 @@ export default function DriverHomeScreen() {
     });
     return () => cancelAnimationFrame(raf);
   }, [currentTrip?.id, currentTrip?.status, hasDistinctPickupDrop, homeMapRouteCoords]);
+
+  // Keep camera focused on the driver's current marker when not actively in-trip routing.
+  useEffect(() => {
+    if (!showHomeChrome) return;
+    if (currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled') return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        mainMapRef.current?.animateCamera(
+          {
+            center: driverMarker,
+            zoom: 16.4,
+            pitch: 45,
+            heading: 0,
+          },
+          { duration: 550 }
+        );
+      } catch {
+        // ignore
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [
+    showHomeChrome,
+    driverMarker.latitude,
+    driverMarker.longitude,
+    currentTrip?.id,
+    currentTrip?.status,
+  ]);
 
   const getEnrouteTotalSec = (trip: DriverTrip) => {
     const kmMatch = trip.distance.match(/([0-9]+(?:\.[0-9]+)?)/);
@@ -2055,25 +2265,51 @@ export default function DriverHomeScreen() {
               <>
                 <Polyline
                   coordinates={homeRoutePolylineCoords}
-                  strokeColor={ridrMapRouteStroke.outer}
+                  strokeColor={mapRouteGuide.outerColor}
                   strokeWidth={9}
                   lineCap="round"
                   lineJoin="round"
                   geodesic={false}
+                  lineDashPattern={mapRouteGuide.lineDashPattern}
                 />
                 <Polyline
                   coordinates={homeRoutePolylineCoords}
-                  strokeColor={ridrMapRouteStroke.inner}
+                  strokeColor={mapRouteGuide.innerColor}
                   strokeWidth={6}
                   lineCap="round"
                   lineJoin="round"
                   geodesic={false}
+                  lineDashPattern={mapRouteGuide.lineDashPattern}
                 />
               </>
+            ) : null}
+            {currentTrip ? (
+              <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 1.9 }} tracksViewChanges={false}>
+                <View
+                  style={[
+                    styles.mapRouteLabelPill,
+                    mapRouteGuide.phase === 'pickup' ? styles.mapRouteLabelPillActive : null,
+                  ]}
+                >
+                  <Text style={styles.mapRouteLabelText}>PICKUP</Text>
+                </View>
+              </Marker>
             ) : null}
             <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={ridrMapMarkerStyles.pickup} />
             </Marker>
+            {currentTrip ? (
+              <Marker coordinate={mapDropoff} anchor={{ x: 0.5, y: 1.9 }} tracksViewChanges={false}>
+                <View
+                  style={[
+                    styles.mapRouteLabelPill,
+                    mapRouteGuide.phase === 'dropoff' ? styles.mapRouteLabelPillActive : null,
+                  ]}
+                >
+                  <Text style={styles.mapRouteLabelText}>DROPOFF</Text>
+                </View>
+              </Marker>
+            ) : null}
             <Marker coordinate={mapDropoff} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={ridrMapMarkerStyles.dropoff} />
             </Marker>
@@ -2082,6 +2318,19 @@ export default function DriverHomeScreen() {
                 <Ionicons name="car-sport" size={18} color={colors.accent} />
               </View>
             </Marker>
+            {ghostDriverCoordinate ? (
+              <Marker coordinate={ghostDriverCoordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+                <View style={styles.ghostDriverMarker}>
+                  <Ionicons name="car" size={14} color="#ffffff" />
+                </View>
+              </Marker>
+            ) : null}
+            {currentTrip ? (
+              <View style={styles.mapRouteGuideChip} pointerEvents="none">
+                <Ionicons name={mapRouteGuide.icon} size={14} color="#ffffff" />
+                <Text style={styles.mapRouteGuideChipText}>{mapRouteGuide.title}</Text>
+              </View>
+            ) : null}
           </RidrMapView>
         </Animated.View>
       ) : null}
@@ -2256,7 +2505,7 @@ export default function DriverHomeScreen() {
         </Animated.View>
       ) : null}
 
-      {!subScreen && currentTrip?.status !== 'in_trip' ? (
+      {!subScreen && (activeTab !== 'home' || currentTrip?.status !== 'in_trip') ? (
         <SafeAreaView edges={['bottom']} style={styles.overlaySafeArea} pointerEvents="box-none">
         <Animated.View
           style={[
@@ -2641,14 +2890,10 @@ export default function DriverHomeScreen() {
         <View style={[styles.modalSheet, { backgroundColor: ui.panelBg }]}>
           <View style={styles.modalHandle} />
           <Text style={[styles.modalTitle, { color: ui.text }]}>Trips Today</Text>
-          <Text style={[styles.modalStat, { color: ui.text }]}>9</Text>
+          <Text style={[styles.modalStat, { color: ui.text }]}>{completedTrips.length}</Text>
           <Text style={[styles.modalStatLabel, { color: ui.textMuted }]}>Completed trips</Text>
           <View style={[styles.modalDivider, { backgroundColor: ui.border }]} />
-          {[
-            ...completedTrips,
-            { id: 'done-4', riderName: 'Omar S.', route: 'Kingston to Portmore', fare: 'J$2,650', when: 'Today, 6:50 AM' },
-            { id: 'done-5', riderName: 'Tanya M.', route: 'New Kingston to Airport', fare: 'J$3,100', when: 'Today, 5:30 AM' },
-          ].map((trip) => (
+          {completedTrips.map((trip) => (
             <View key={trip.id} style={[styles.modalTripRow, { borderColor: ui.border }]}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.modalRowValue, { color: ui.text }]}>{trip.route}</Text>
@@ -2669,26 +2914,18 @@ export default function DriverHomeScreen() {
         <View style={[styles.modalSheet, { backgroundColor: ui.panelBg }]}>
           <View style={styles.modalHandle} />
           <Text style={[styles.modalTitle, { color: ui.text }]}>Your Rating</Text>
-          <Text style={[styles.modalStat, { color: ui.text }]}>4.9 ★</Text>
-          <Text style={[styles.modalStatLabel, { color: ui.textMuted }]}>Based on 312 ratings</Text>
+          <Text style={[styles.modalStat, { color: ui.text }]}>—</Text>
+          <Text style={[styles.modalStatLabel, { color: ui.textMuted }]}>No rating data returned by backend.</Text>
           <View style={[styles.modalDivider, { backgroundColor: ui.border }]} />
-          {[
-            { stars: 5, pct: 88 },
-            { stars: 4, pct: 9 },
-            { stars: 3, pct: 2 },
-            { stars: 2, pct: 1 },
-            { stars: 1, pct: 0 },
-          ].map(({ stars, pct }) => (
+          {[5, 4, 3, 2, 1].map((stars) => (
             <View key={stars} style={styles.ratingBarRow}>
               <Text style={[styles.ratingBarStar, { color: ui.textMuted }]}>{stars} ★</Text>
-              <View style={[styles.ratingBarTrack, { backgroundColor: ui.soft }]}>
-                <View style={[styles.ratingBarFill, { width: `${pct}%` as any, backgroundColor: '#FFD000' }]} />
-              </View>
-              <Text style={[styles.ratingBarPct, { color: ui.textMuted }]}>{pct}%</Text>
+              <View style={[styles.ratingBarTrack, { backgroundColor: ui.soft }]} />
+              <Text style={[styles.ratingBarPct, { color: ui.textMuted }]}>—</Text>
             </View>
           ))}
           <View style={[styles.modalDivider, { backgroundColor: ui.border }]} />
-          <Text style={[styles.modalFootnote, { color: ui.textMuted }]}>Ratings reflect your last 90 days of trips.</Text>
+          <Text style={[styles.modalFootnote, { color: ui.textMuted }]}>Ratings will appear after backend rating analytics are integrated.</Text>
           <Pressable style={styles.modalCloseBtn} onPress={() => setEarningsModal(null)}>
             <Text style={styles.modalCloseBtnText}>Done</Text>
           </Pressable>
@@ -3050,6 +3287,53 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     lineHeight: 24,
+  },
+  mapRouteGuideChip: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 118 : 92,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    zIndex: 9,
+  },
+  mapRouteGuideChipText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  mapRouteLabelPill: {
+    backgroundColor: 'rgba(0,0,0,0.68)',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.26)',
+  },
+  mapRouteLabelPillActive: {
+    backgroundColor: '#171717',
+    borderColor: '#FFD000',
+  },
+  mapRouteLabelText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+  ghostDriverMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(23,23,23,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   profileIconShell: {
     width: 40,

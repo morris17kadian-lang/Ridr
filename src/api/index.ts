@@ -28,3 +28,9 @@ export type {
   KingstonZoneFareEstimateRequest,
   RideRequestDto,
 } from './rides';
+export { submitDriverApplication } from './driverApplications';
+export type {
+  DriverApplicationUploadCategory,
+  DriverApplicationUploadInput,
+  SubmitDriverApplicationResponse,
+} from './driverApplications';

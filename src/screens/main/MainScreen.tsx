@@ -52,6 +52,7 @@ import { useAppTheme } from '../../theme/ThemeProvider';
 import type { ProfileCard } from './profile/profileTypes';
 import { MainSubScreenRouter } from './subScreens/MainSubScreenRouter';
 import type { MainStackSubScreen } from './subScreens/types';
+import type { BecomeDriverUploadItem } from './subScreens/BecomeDriverScreen';
 import {
   fetchPlaceDetailsCoordinate,
   isInJamaicaServiceArea,
@@ -87,6 +88,7 @@ import {
   getNearbyDrivers,
   listPaymentMethods,
   paymentMethodToDisplay,
+  submitDriverApplication,
   updatePaymentMethod,
 } from '../../api';
 import {
@@ -102,14 +104,10 @@ import {
   canFetchAuthenticatedApi,
   getActivityFeed,
   getFavourites,
-  isDemoRiderSession,
   mapApiFrequentRoutesToRows,
   mapApiSavedPlacesToFavouriteRows,
 } from '../../api/activityFavourites';
 import {
-  mockActivityFeed,
-  mockFavouritePlaces,
-  mockFrequentRoutes,
   type ActivityItem,
   type FavouritePlaceRow,
   type FrequentRouteRow,
@@ -552,7 +550,7 @@ function ProfileIcon({ size, color = '#171717' }: { size: number; color?: string
 // Tab icons use Ionicons (from @expo/vector-icons)
 
 export default function MainScreen() {
-  const { signOut, user, setAppMode } = useAuth();
+  const { signOut, user, setAppMode, setUserRole } = useAuth();
   const { colors, isDark, themeOverride, setThemeOverride } = useAppTheme();
   usePushToken();
   const [selectedRide, setSelectedRide] = useState('ride');
@@ -562,9 +560,9 @@ export default function MainScreen() {
   const [activityFilter, setActivityFilter] = useState<'all' | 'today' | 'yesterday' | '7days' | 'month'>('all');
   const [favSearch, setFavSearch] = useState('');
   const [favSearchOpen, setFavSearchOpen] = useState(false);
-  const [activityFeedItems, setActivityFeedItems] = useState<ActivityItem[]>(mockActivityFeed);
-  const [favouritePlacesRows, setFavouritePlacesRows] = useState<FavouritePlaceRow[]>(mockFavouritePlaces);
-  const [frequentRoutesRows, setFrequentRoutesRows] = useState<FrequentRouteRow[]>(mockFrequentRoutes);
+  const [activityFeedItems, setActivityFeedItems] = useState<ActivityItem[]>([]);
+  const [favouritePlacesRows, setFavouritePlacesRows] = useState<FavouritePlaceRow[]>([]);
+  const [frequentRoutesRows, setFrequentRoutesRows] = useState<FrequentRouteRow[]>([]);
   const [selectedRideDetail, setSelectedRideDetail] = useState<RideDetailRow | null>(null);
   const [screen, setScreen] = useState<MainStackSubScreen>('home');
   const [sheetMinimized, setSheetMinimized] = useState(false);
@@ -642,6 +640,7 @@ export default function MainScreen() {
   const [findingDriverPhase, setFindingDriverPhase] = useState<'searching' | 'readySwipe' | 'no_driver_found' | 'zooming'>('searching');
   const findingPhaseHapticRef = useRef<string | null>(null);
   const [nearbyDriverSpots, setNearbyDriverSpots] = useState<LatLng[]>([]);
+  const [devDriverSimulationEnabled, setDevDriverSimulationEnabled] = useState(false);
   const [activeTrip, setActiveTrip] = useState<ActiveTripState | null>(null);
   const [bookedRides, setBookedRides] = useState<BookedRideRecord[]>([]);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -1364,15 +1363,9 @@ export default function MainScreen() {
 
   const loadActivityFavourites = useCallback(async () => {
     if (!canFetchAuthenticatedApi()) {
-      setActivityFeedItems(mockActivityFeed);
-      setFavouritePlacesRows(mockFavouritePlaces);
-      setFrequentRoutesRows(mockFrequentRoutes);
-      return;
-    }
-    if (await isDemoRiderSession()) {
-      setActivityFeedItems(mockActivityFeed);
-      setFavouritePlacesRows(mockFavouritePlaces);
-      setFrequentRoutesRows(mockFrequentRoutes);
+      setActivityFeedItems([]);
+      setFavouritePlacesRows([]);
+      setFrequentRoutesRows([]);
       return;
     }
     try {
@@ -1384,9 +1377,9 @@ export default function MainScreen() {
       setFavouritePlacesRows(mapApiSavedPlacesToFavouriteRows(fav.savedPlaces));
       setFrequentRoutesRows(mapApiFrequentRoutesToRows(fav.frequentRoutes));
     } catch {
-      setActivityFeedItems(mockActivityFeed);
-      setFavouritePlacesRows(mockFavouritePlaces);
-      setFrequentRoutesRows(mockFrequentRoutes);
+      setActivityFeedItems([]);
+      setFavouritePlacesRows([]);
+      setFrequentRoutesRows([]);
     }
   }, []);
 
@@ -1875,6 +1868,7 @@ export default function MainScreen() {
     setNearbyDriverSpots([]);
     setFindingDriverVisible(false);
     setFindingDriverPhase('searching');
+    setDevDriverSimulationEnabled(false);
     setBookingFor('self');
     const canCard =
       cards.length > 0 &&
@@ -1887,6 +1881,34 @@ export default function MainScreen() {
     setNearbyDriverSpots([]);
     setFindingDriverPhase('searching');
   };
+
+  const submitBecomeDriverApplication = useCallback(async (uploads: BecomeDriverUploadItem[]) => {
+    try {
+      const response = await submitDriverApplication(
+        uploads.map((item) => ({
+          category: item.kind,
+          uri: item.uri,
+          name: item.name,
+          mimeType: item.mimeType,
+        }))
+      );
+      await setUserRole(response.user.role);
+      if (response.user.role === 'driver') {
+        await setAppMode('driver');
+        Alert.alert('Application approved', response.message ?? 'You are now a verified driver.');
+        setScreen('home');
+        return;
+      }
+      Alert.alert(
+        'Application submitted',
+        response.message ?? 'Your documents were submitted and are pending review.'
+      );
+      setScreen('home');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not submit driver application.';
+      Alert.alert('Application error', msg);
+    }
+  }, [setAppMode, setUserRole]);
 
   // When zooming phase starts: fit map to show driver spots, then transition to readySwipe
   useEffect(() => {
@@ -1916,8 +1938,8 @@ export default function MainScreen() {
     const runNearbyCheck = async () => {
       if (cancelled) return;
 
-      // ── DEV: always simulate 4 nearby drivers after a short delay ──
-      if (__DEV__) {
+      // DEV-only simulation is opt-in via the modal's dev control.
+      if (__DEV__ && devDriverSimulationEnabled) {
         await new Promise<void>((r) => setTimeout(r, 1800));
         if (cancelled) return;
         const devOffsets = [
@@ -1942,6 +1964,9 @@ export default function MainScreen() {
           lng: pickupCoordinate.longitude,
           radiusKm: 5,
         });
+        if (__DEV__) {
+          console.log('[NearbyDrivers] response payload:', raw);
+        }
         if (cancelled) return;
         const n = countDriversInNearbyResponse(raw);
         if (n === null) return;
@@ -1980,7 +2005,7 @@ export default function MainScreen() {
       clearTimeout(initial);
       clearInterval(interval);
     };
-  }, [findingDriverVisible, findingDriverPhase, pickupCoordinate, closeFindingDriver]);
+  }, [findingDriverVisible, findingDriverPhase, pickupCoordinate, closeFindingDriver, devDriverSimulationEnabled]);
 
   const persistTripRecord = (trip: ActiveTripState) => {
     setBookedRides((prev) => {
@@ -2805,6 +2830,7 @@ export default function MainScreen() {
     presentRide,
     leaveActiveRideScreen,
     onCancelRide: handleCancelRide,
+    onSubmitBecomeDriver: submitBecomeDriverApplication,
   });
   if (subScreen) return subScreen;
 
@@ -2849,7 +2875,14 @@ export default function MainScreen() {
         onSwipeConfirm={confirmRideRequest}
         onRetry={retryFindingDriver}
         confirming={rideRequestSubmitting}
-        onDevSkipWait={__DEV__ ? () => setFindingDriverPhase('readySwipe') : undefined}
+        onDevSkipWait={
+          __DEV__
+            ? () => {
+                setDevDriverSimulationEnabled(true);
+                setFindingDriverPhase('searching');
+              }
+            : undefined
+        }
         canPayWithCard={
           cards.length > 0 &&
           defaultCard != null &&
@@ -3017,17 +3050,7 @@ export default function MainScreen() {
               style={[styles.modeSwitchButton, { backgroundColor: ui.softBg, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.divider }]}
               onPress={() => {
                 hapticLight();
-                void (async () => {
-                  try {
-                    await setAppMode('driver');
-                  } catch (e) {
-                    const msg = e instanceof Error ? e.message : 'Location is required for Driver mode.';
-                    Alert.alert('Location required', msg, [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Open Settings', onPress: () => void Linking.openSettings() },
-                    ]);
-                  }
-                })();
+                setScreen('becomeDriver');
               }}
               accessibilityRole="button"
               accessibilityLabel="Switch to driver mode"
@@ -3535,9 +3558,22 @@ export default function MainScreen() {
         {/* Promotional Card */}
         <View style={[styles.promoCard, { backgroundColor: isDark ? '#151517' : undefined }]}>
           <View style={styles.promoContent}>
-            <Text style={[styles.promoTitle, { color: isDark ? ui.text : undefined }]}>Invest today. Secure a{'\n'}healthy tomorrow &{'\n'}every day.</Text>
-            <Pressable style={styles.promoButton}>
-              <Text style={styles.promoButtonText}>Invest Now!</Text>
+            <Text style={[styles.promoTitle, { color: isDark ? ui.text : undefined }]}>
+              Want to earn with Ridr?{'\n'}Become a driver today.
+            </Text>
+            <Text style={[styles.promoSubText, { color: ui.textMuted }]}>
+              Drive on your own schedule and start accepting rides near you.
+            </Text>
+            <Pressable
+              style={styles.promoButton}
+              onPress={() => {
+                hapticLight();
+                setScreen('becomeDriver');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Become a driver"
+            >
+              <Text style={styles.promoButtonText}>Become a Driver</Text>
             </Pressable>
           </View>
           <View style={styles.promoIllustration}>

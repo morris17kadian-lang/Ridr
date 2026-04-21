@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Alert, Animated, Pressable, Text, View } from 'react-native';
+import { Alert, Animated, Linking, Pressable, Text, View } from 'react-native';
 
 type DriverTripStatus = 'matched' | 'arrived' | 'in_trip' | 'completed' | 'cancelled';
 
 type DriverTrip = {
   riderName: string;
+  riderPhone?: string;
   distance: string;
   fare: string;
   paymentLabel: string;
@@ -91,6 +92,7 @@ export function DriverHomeTabContent({
   hapticMedium,
   hapticSelection,
 }: DriverHomeTabContentProps) {
+  const tripsTodayCount = completedTrips.length;
   return (
     <>
       {currentTrip?.status !== 'in_trip' ? (
@@ -102,7 +104,7 @@ export function DriverHomeTabContent({
               setEarningsModal('rating');
             }}
           >
-            <Text style={styles.earningsPillValueBlack}>4.9 ★</Text>
+            <Text style={styles.earningsPillValueBlack}>—</Text>
             <Text style={styles.earningsPillLabelBlack}>Rating</Text>
           </Pressable>
           <Pressable
@@ -122,7 +124,7 @@ export function DriverHomeTabContent({
               setEarningsModal('trips');
             }}
           >
-            <Text style={styles.earningsPillValueBlack}>9</Text>
+            <Text style={styles.earningsPillValueBlack}>{tripsTodayCount}</Text>
             <Text style={styles.earningsPillLabelBlack}>Trips today</Text>
           </Pressable>
         </View>
@@ -163,7 +165,11 @@ export function DriverHomeTabContent({
                     style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
                     onPress={() => {
                       hapticLight();
-                      Alert.alert('Call rider', `Calling ${currentTrip.riderName} is not wired up yet.`);
+                      if (!currentTrip.riderPhone) {
+                        Alert.alert('Call rider', 'Rider phone number is unavailable from backend.');
+                        return;
+                      }
+                      void Linking.openURL(`tel:${currentTrip.riderPhone}`);
                     }}
                   >
                     <Ionicons name="call" size={17} color="#ffffff" />
@@ -172,7 +178,11 @@ export function DriverHomeTabContent({
                     style={[styles.currentTripContactBtn, { backgroundColor: '#171717' }]}
                     onPress={() => {
                       hapticLight();
-                      Alert.alert('Message rider', `Messaging ${currentTrip.riderName} is not wired up yet.`);
+                      if (!currentTrip.riderPhone) {
+                        Alert.alert('Message rider', 'Rider phone number is unavailable from backend.');
+                        return;
+                      }
+                      void Linking.openURL(`sms:${currentTrip.riderPhone}`);
                     }}
                   >
                     <Ionicons name="chatbubble-ellipses" size={16} color="#ffffff" />
@@ -273,17 +283,17 @@ export function DriverHomeTabContent({
             >
               <View style={styles.weeklyStatRow}>
                 <View style={styles.weeklyStatItem}>
-                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>94%</Text>
+                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>—</Text>
                   <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Acceptance</Text>
                 </View>
                 <View style={[styles.weeklyStatDivider, { backgroundColor: ui.border }]} />
                 <View style={styles.weeklyStatItem}>
-                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>6.2 hrs</Text>
+                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>—</Text>
                   <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Online time</Text>
                 </View>
                 <View style={[styles.weeklyStatDivider, { backgroundColor: ui.border }]} />
                 <View style={styles.weeklyStatItem}>
-                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>J$48,200</Text>
+                  <Text style={[styles.weeklyStatValue, { color: ui.text }]}>{formatJmd(availableCashOutAmount)}</Text>
                   <Text style={[styles.weeklyStatLabel, { color: ui.textMuted }]}>Earned</Text>
                 </View>
               </View>

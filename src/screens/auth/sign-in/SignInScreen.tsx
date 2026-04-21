@@ -28,7 +28,7 @@ import { AuthTextField } from '../components/AuthTextField';
 type AuthMode = 'login' | 'signup';
 
 export default function SignInScreen({ navigation, route }: AuthEntryProps) {
-  const { signIn, signInSampleRider, signUp, setAppMode } = useAuth();
+  const { signIn, signUp, setAppMode } = useAuth();
   const { colors } = useAppTheme();
   const authStyles = useAuthStyles();
   const [mode, setMode] = useState<AuthMode>(route.name === 'SignUp' ? 'signup' : 'login');
@@ -114,8 +114,6 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
     Alert.alert(title, friendly);
   };
 
-  const isDriverStaffCode = (value: string) => /^R\d+$/i.test(value.trim());
-
   const onSubmit = async (targetMode: AppMode = 'rider') => {
     if (mode === 'login') {
       if (!loginIdentifier.trim() || !password) {
@@ -124,8 +122,6 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
       }
       setSubmitting(true);
       try {
-        const nextMode: AppMode = isDriverStaffCode(loginIdentifier) ? 'driver' : targetMode;
-        await setAppMode(nextMode);
         const result = await signIn(loginIdentifier.trim(), password);
         if (result.status === 'password-reset-required') {
           navigation.replace('ResetPassword', {
@@ -134,6 +130,13 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
             staffCode: result.staffCode,
             isTemporaryPassword: true,
           });
+        } else {
+          const nextMode: AppMode = result.role === 'driver' ? 'driver' : targetMode;
+          try {
+            await setAppMode(nextMode);
+          } catch (modeErr) {
+            showAuthError('Sign in', modeErr instanceof Error ? modeErr.message : 'Could not switch app mode.');
+          }
         }
       } catch (e) {
         showAuthError('Sign in', e instanceof Error ? e.message : 'Something went wrong.');
@@ -331,36 +334,6 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
                   <Text style={authStyles.primaryBtnText}>{mode === 'login' ? 'Sign in' : 'Sign up'}</Text>
                 )}
               </Pressable>
-
-              {mode === 'login' ? (
-                <>
-                  <Pressable
-                    style={authStyles.demoBtn}
-                    onPress={() => {
-                      setSubmitting(true);
-                      void (async () => {
-                        try {
-                          await setAppMode('rider');
-                          await signInSampleRider();
-                        } catch (e) {
-                          showAuthError('Sample rider login', e instanceof Error ? e.message : 'Something went wrong.');
-                        } finally {
-                          setSubmitting(false);
-                        }
-                      })();
-                    }}
-                    disabled={submitting}
-                    accessibilityRole="button"
-                    accessibilityLabel="Use sample rider login"
-                  >
-                    <Ionicons name="person-circle-outline" size={18} color={colors.text} />
-                    <Text style={authStyles.demoBtnText}>Use Sample Rider Login</Text>
-                  </Pressable>
-                  <Text style={authStyles.demoBtnHint}>
-                    Opens a local rider demo account without needing backend credentials.
-                  </Text>
-                </>
-              ) : null}
 
               {mode === 'signup' ? (
                 <View style={authStyles.footerNote}>

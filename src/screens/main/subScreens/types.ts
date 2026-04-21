@@ -3,9 +3,11 @@ import type { ThemeOverride } from '../../../theme/ThemeProvider';
 import type { MainScreenUi } from '../mainScreenUi';
 import type { ProfileCard } from '../profile/profileTypes';
 import type { ActiveTripState } from '../ride/activeTripTypes';
+import type { BecomeDriverUploadItem } from './BecomeDriverScreen';
 
 export type MainStackSubScreen =
   | 'home'
+  | 'becomeDriver'
   | 'activeRide'
   | 'profile'
   | 'profileEdit'
@@ -103,4 +105,5 @@ export type MainSubScreenRouterProps = {
   presentRide: ActiveTripState | null;
   leaveActiveRideScreen: () => void;
   onCancelRide?: (reason: import('../ride/activeTripTypes').TripCancelReason, fee: number) => void;
+  onSubmitBecomeDriver: (uploads: BecomeDriverUploadItem[]) => Promise<void>;
 };
