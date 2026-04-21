@@ -42,5 +42,5 @@ export function SplashAuthGate() {
 
   if (!hasUser) return <AuthStack />;
 
-  return appMode === 'driver' ? <DriverStack /> : <MainStack />;
+  return appMode === 'driver' && user?.role === 'driver' ? <DriverStack /> : <MainStack />;
 }

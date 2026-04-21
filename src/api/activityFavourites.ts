@@ -1,6 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-import { AUTH_SESSION_KEY } from '../context/AuthContext';
 import { apiRequest } from './http';
 import { getApiBaseUrl } from './config';
 import type {
@@ -8,8 +5,6 @@ import type {
   FavouritePlaceRow,
   FrequentRouteRow,
 } from '../screens/main/data/mainTabData';
-
-const DEMO_TOKEN_PREFIX = 'ridr_demo_access_token';
 
 export type ApiActivityRideData = {
   id: string;
@@ -78,17 +73,6 @@ export type FavouritesResponse = {
   savedPlaces: ApiSavedPlaceFavourite[];
   frequentRoutes: ApiFrequentRoute[];
 };
-
-export async function isDemoRiderSession(): Promise<boolean> {
-  const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
-  if (!raw) return true;
-  try {
-    const s = JSON.parse(raw) as { accessToken?: string };
-    return typeof s.accessToken === 'string' && s.accessToken.startsWith(DEMO_TOKEN_PREFIX);
-  } catch {
-    return true;
-  }
-}
 
 export function canFetchAuthenticatedApi(): boolean {
   return Boolean(getApiBaseUrl()?.trim());

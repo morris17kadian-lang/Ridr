@@ -1008,6 +1008,11 @@ export const styles = StyleSheet.create({
     lineHeight: 22,
     color: '#171717',
   },
+  promoSubText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
   promoButton: {
     alignSelf: 'flex-start',
     backgroundColor: '#FFD000',

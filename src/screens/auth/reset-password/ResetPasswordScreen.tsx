@@ -84,7 +84,7 @@ export default function ResetPasswordScreen({ navigation, route }: ResetPassword
               ) : (
                 <Text style={authStyles.subtitle}>
                   Enter a new password for your account. If you used a reset link from email, you can set
-                  it here (demo flow).
+                  it here.
                 </Text>
               )}
 

@@ -1,20 +1,21 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
+import { getApiBaseUrl } from '../api/config';
 import { ensureDriverLocationReady } from '../lib/driverLocationRequirement';
 
 export const AUTH_SESSION_KEY = 'ridr_auth_session_v1';
 export const APP_MODE_KEY = 'ridr_app_mode_v1';
-const DEMO_ACCESS_TOKEN_PREFIX = 'ridr_demo_access_token';
 const REFRESH_MARGIN_MS = 60_000;
 
 export type AppMode = 'rider' | 'driver';
+export type AppUserRole = 'user' | 'driver';
 
 export type AuthUser = {
   email: string;
   uid: string;
+  role: AppUserRole;
   username?: string;
   staffCode?: string;
   firstName?: string;
@@ -23,7 +24,7 @@ export type AuthUser = {
 };
 
 export type SignInResult =
-  | { status: 'signed-in' }
+  | { status: 'signed-in'; role: AppUserRole }
   | {
       status: 'password-reset-required';
       identifier: string;
@@ -44,11 +45,10 @@ type AuthContextValue = {
   loading: boolean;
   appMode: AppMode;
   setAppMode: (mode: AppMode) => Promise<void>;
+  setUserRole: (role: AppUserRole) => Promise<void>;
   signIn: (identifier: string, password: string) => Promise<SignInResult>;
-  signInSampleRider: () => Promise<void>;
   signUp: (payload: SignUpPayload) => Promise<void>;
   signOut: () => Promise<void>;
-  /** Called after forgot-password flow — local session only for UI demo */
   markPasswordResetSent: (email: string) => Promise<void>;
 };
 
@@ -61,30 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
 
-  const baseUrl = useMemo(() => {
-    const fromEnv = process.env.EXPO_PUBLIC_BASE_URL;
-    if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim().replace(/\/+$/, '');
-
-    const fromExpoConfig = Constants.expoConfig?.extra?.baseUrl;
-    if (typeof fromExpoConfig === 'string' && fromExpoConfig.trim()) {
-      return fromExpoConfig.trim().replace(/\/+$/, '');
-    }
-
-    const fromManifest = ((Constants as unknown as { manifest?: { extra?: { baseUrl?: string } } }).manifest
-      ?.extra?.baseUrl ?? '');
-    if (typeof fromManifest === 'string' && fromManifest.trim()) {
-      return fromManifest.trim().replace(/\/+$/, '');
-    }
-
-    const fromManifest2 = ((Constants as unknown as {
-      manifest2?: { extra?: { expoClient?: { extra?: { baseUrl?: string } } } };
-    }).manifest2?.extra?.expoClient?.extra?.baseUrl ?? '');
-    if (typeof fromManifest2 === 'string' && fromManifest2.trim()) {
-      return fromManifest2.trim().replace(/\/+$/, '');
-    }
-
-    return '';
-  }, []);
+  const baseUrl = useMemo(() => getApiBaseUrl(), []);
 
   type AuthSession = {
     user: AuthUser;
@@ -96,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user: {
       id: string;
       email: string;
+      role?: string;
       username?: string;
       staffCode?: string;
       firstName?: string;
@@ -112,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       uid: apiUser.id,
       email: apiUser.email.trim().toLowerCase(),
+      role: apiUser.role === 'driver' ? 'driver' : 'user',
       ...(typeof apiUser.username === 'string' ? { username: apiUser.username } : {}),
       ...(typeof apiUser.staffCode === 'string' ? { staffCode: apiUser.staffCode } : {}),
       ...(typeof apiUser.firstName === 'string' ? { firstName: apiUser.firstName } : {}),
@@ -162,6 +141,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setAppMode = useCallback(async (mode: AppMode) => {
     if (mode === 'driver') {
+      if (user?.role !== 'driver') {
+        throw new Error('Your account is not yet approved for Driver mode.');
+      }
       const loc = await ensureDriverLocationReady();
       if (!loc.ok) {
         throw new Error(loc.message);
@@ -169,6 +151,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setAppModeState(mode);
     await AsyncStorage.setItem(APP_MODE_KEY, mode);
+  }, [user?.role]);
+
+  const setUserRole = useCallback(async (role: AppUserRole) => {
+    setUser((prev) => (prev ? { ...prev, role } : prev));
+    const raw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as Partial<AuthSession> | null;
+      if (!parsed || typeof parsed !== 'object' || !parsed.user) return;
+      const next = {
+        ...parsed,
+        user: {
+          ...parsed.user,
+          role,
+        },
+      };
+      await AsyncStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore persistence errors */
+    }
   }, []);
 
   const requestJson = useCallback(
@@ -222,22 +224,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [baseUrl]
   );
 
-  const signInSampleRider = useCallback(async () => {
-    const demoSession: AuthSession = {
-      user: {
-        uid: 'sample-rider-001',
-        email: 'sample.rider@ridr.app',
-        username: 'sample.rider',
-        firstName: 'Sample',
-        lastName: 'Rider',
-        phone: '+18765550199',
-      },
-      accessToken: `${DEMO_ACCESS_TOKEN_PREFIX}:${Date.now()}`,
-      refreshToken: 'ridr_demo_refresh_token',
-    };
-    await persistSession(demoSession);
-  }, [persistSession]);
-
   useEffect(() => {
     (async () => {
       try {
@@ -274,6 +260,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               const restoredUser: AuthUser = {
                 email: parsed.user.email,
                 uid: parsed.user.uid,
+                role: parsed.user.role === 'driver' ? 'driver' : 'user',
                 ...(typeof parsed.user.username === 'string' ? { username: parsed.user.username } : {}),
                 ...(typeof parsed.user.staffCode === 'string' ? { staffCode: parsed.user.staffCode } : {}),
                 ...(typeof parsed.user.firstName === 'string' ? { firstName: parsed.user.firstName } : {}),
@@ -281,10 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 ...(typeof parsed.user.phone === 'string' ? { phone: parsed.user.phone } : {}),
               };
 
-              if (
-                parsed.accessToken.startsWith(DEMO_ACCESS_TOKEN_PREFIX) ||
-                !isTokenExpiredOrNearExpiry(parsed.accessToken)
-              ) {
+              if (!isTokenExpiredOrNearExpiry(parsed.accessToken)) {
                 await persistSession({
                   user: restoredUser,
                   accessToken: parsed.accessToken,
@@ -345,7 +329,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refreshToken: data.refreshToken,
       });
 
-      return { status: 'signed-in' };
+      return { status: 'signed-in', role: data.user.role === 'driver' ? 'driver' : 'user' };
     },
     [persistSession, requestJson, toAuthUser]
   );
@@ -390,12 +374,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       appMode,
       setAppMode,
       signIn,
-      signInSampleRider,
       signUp,
       signOut,
+      setUserRole,
       markPasswordResetSent,
     }),
-    [user, loading, appMode, setAppMode, signIn, signInSampleRider, signUp, signOut, markPasswordResetSent]
+    [user, loading, appMode, setAppMode, signIn, signUp, signOut, setUserRole, markPasswordResetSent]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

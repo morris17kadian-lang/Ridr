@@ -4,6 +4,7 @@ import { SwipeBackScreen } from '../components/SwipeBackScreen';
 import { NotificationsScreen } from '../notifications/NotificationsScreen';
 import { ProfileEditScreen, ProfileScreen } from '../profile/Profile';
 import { ActiveRideScreen } from '../ride/ActiveRideScreen';
+import { BecomeDriverScreen } from './BecomeDriverScreen';
 import {
   SettingsAppearanceScreen,
   SettingsHelpScreen,
@@ -62,6 +63,19 @@ export function MainSubScreenRouter(p: MainSubScreenRouterProps): React.ReactEle
           closeEditCardExpiry={p.closeEditCardExpiry}
           saveEditCardExpiry={p.saveEditCardExpiry}
           onConfirmSignOut={p.onConfirmSignOut}
+        />
+      </SwipeBackScreen>
+    );
+  }
+
+  if (screen === 'becomeDriver') {
+    return (
+      <SwipeBackScreen onBack={() => setScreen('home')}>
+        <BecomeDriverScreen
+          ui={p.ui}
+          isDark={p.isDark}
+          onBack={() => setScreen('home')}
+          onSubmit={p.onSubmitBecomeDriver}
         />
       </SwipeBackScreen>
     );
