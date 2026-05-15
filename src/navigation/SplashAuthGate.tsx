@@ -16,7 +16,7 @@ import { MainStack } from './MainStack';
  * Splash is hidden after the auth tree has had a chance to mount.
  */
 export function SplashAuthGate() {
-  const { user, loading, appMode } = useAuth();
+  const { user, loading, appMode, driverModeEligible } = useAuth();
   const { colors } = useAppTheme();
   const hiddenRef = useRef(false);
   const isLoading = loading === true;
@@ -42,5 +42,5 @@ export function SplashAuthGate() {
 
   if (!hasUser) return <AuthStack />;
 
-  return appMode === 'driver' && user?.role === 'driver' ? <DriverStack /> : <MainStack />;
+  return appMode === 'driver' && driverModeEligible ? <DriverStack /> : <MainStack />;
 }

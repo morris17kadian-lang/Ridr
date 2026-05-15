@@ -48,6 +48,15 @@ module.exports = {
             'Ridr uses your location in Driver mode so riders can see when you arrive and to match you with nearby requests.',
         },
       ],
+      [
+        'expo-image-picker',
+        {
+          photosPermission:
+            'Ridr needs access to your photos to upload license images, documents, and vehicle photos.',
+          cameraPermission:
+            'Ridr needs the camera to capture photos of your license and vehicle for your driver application.',
+        },
+      ],
     ],
   },
 };

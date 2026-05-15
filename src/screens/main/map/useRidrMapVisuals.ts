@@ -50,11 +50,11 @@ export function useRidrMapMarkerStyles(isDark: boolean, colors: RidrMapMarkerThe
   );
 }
 
-/** Double-polyline route stroke (outer + inner) — same as MainScreen. */
+/** Base route stroke (outer halo + inner core) — softer outer for pulse-route overlays. */
 export function useRidrMapRouteStroke(isDark: boolean, accent: string, text: string) {
   return useMemo(
     () => ({
-      outer: isDark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.95)',
+      outer: isDark ? 'rgba(0, 0, 0, 0.38)' : 'rgba(255, 255, 255, 0.78)',
       inner: isDark ? accent : text,
     }),
     [isDark, accent, text]

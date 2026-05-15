@@ -24,14 +24,17 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   createPaymentMethod,
   deletePaymentMethod,
+  fetchInboundRideRequests,
   listPaymentMethods,
-  listMyRideRequests,
+  patchDriverCurrentLocationOnServer,
+  patchDriverPresenceOnServer,
   paymentMethodToDisplay,
+  tryAcceptRideAsDriver,
   updatePaymentMethod,
 } from '../../api';
 import type { RideRequestDto } from '../../api/rides';
@@ -44,6 +47,7 @@ import { hapticLight, hapticMedium, hapticSelection, hapticSuccess } from '../..
 import { useAppTheme, type ThemeOverride } from '../../theme/ThemeProvider';
 import { KSA_MAP_CENTER, type LatLng } from '../main/locationResolve';
 import { RidrMapView } from '../main/map/RidrMapView';
+import { PulseRoutePolylines } from '../main/map/PulseRoutePolylines';
 import { useRidrMapMarkerStyles, useRidrMapRouteStroke } from '../main/map/useRidrMapVisuals';
 import type { MainScreenUi } from '../main/mainScreenUi';
 import { ProfileEditScreen } from '../main/profile/screens/ProfileEditScreen';
@@ -124,9 +128,76 @@ type CompletedTrip = {
   when: string;
 };
 
+const POOL_OFFER_STATUSES = new Set([
+  'searching',
+  'requested',
+  'pending',
+  'pending_match',
+  'finding_driver',
+  'driver_search',
+  'awaiting_driver',
+  'open',
+  'queued',
+]);
+
+function isPoolOffer(r: RideRequestDto): boolean {
+  const s = String(r.status ?? '').toLowerCase();
+  const phase = String(r.searchPhase ?? '').toLowerCase();
+  if (POOL_OFFER_STATUSES.has(s)) return true;
+  if (phase.includes('search') || phase.includes('match') || phase.includes('dispatch')) return true;
+  return false;
+}
+
+function riderNameFromDto(r: RideRequestDto): string {
+  const m = r.metadata;
+  if (m && typeof m === 'object') {
+    const o = m as Record<string, unknown>;
+    const first = o.riderFirstName ?? o.passengerFirstName ?? o.firstName;
+    const last = o.riderLastName ?? o.passengerLastName ?? o.lastName;
+    if (typeof first === 'string' && first.trim()) {
+      const f = first.trim();
+      if (typeof last === 'string' && last.trim()) return `${f} ${last.trim()}`.slice(0, 80);
+      return f.slice(0, 80);
+    }
+    if (typeof o.riderName === 'string' && o.riderName.trim()) return o.riderName.trim().slice(0, 80);
+  }
+  return 'Passenger';
+}
+
+function riderPhoneFromDto(r: RideRequestDto): string | undefined {
+  const m = r.metadata;
+  if (m && typeof m === 'object') {
+    const o = m as Record<string, unknown>;
+    const p = o.riderPhone ?? o.passengerPhone ?? o.phone;
+    if (typeof p === 'string' && p.trim()) return p.trim();
+  }
+  return undefined;
+}
+
 function ridePointToLatLng(point: RideRequestDto['pickup']): LatLng {
-  const [lng, lat] = point.coordinates;
-  return { latitude: lat, longitude: lng };
+  if (point?.coordinates?.length === 2) {
+    const [lng, lat] = point.coordinates;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { latitude: lat, longitude: lng };
+    }
+  }
+  return KSA_MAP_CENTER;
+}
+
+function dtoToIncomingRequest(r: RideRequestDto): IncomingRequest {
+  return {
+    id: r.id,
+    riderName: riderNameFromDto(r),
+    riderPhone: riderPhoneFromDto(r),
+    pickup: r.pickup?.address ?? 'Pickup',
+    pickupCoordinate: ridePointToLatLng(r.pickup),
+    dropoff: r.dropoff?.address ?? 'Dropoff',
+    dropoffCoordinate: ridePointToLatLng(r.dropoff),
+    fare: rideFareLabel(r),
+    eta: rideEtaLabel(r),
+    distance: rideDistanceLabel(r),
+    paymentLabel: r.payment?.method === 'cash' ? 'Cash' : 'Card',
+  };
 }
 
 function rideFareLabel(dto: RideRequestDto): string {
@@ -418,6 +489,8 @@ export default function DriverHomeScreen() {
   const driverHomeScrollRef = useRef<ScrollView | null>(null);
   const allTripsSlideAnim = useRef(new Animated.Value(800)).current;
   const requestSoundRef = useRef<Audio.Sound | null>(null);
+  /** Latest GPS for inbound ride polling — avoids restarting intervals on every GPS tick. */
+  const driverLocRef = useRef<LatLng | null>(null);
   const pinInputRef = useRef<TextInput>(null);
   const driverSheetPan = useRef(new Animated.Value(0)).current;
   // Safety refs
@@ -519,6 +592,7 @@ export default function DriverHomeScreen() {
     text: colors.text,
   });
   const ridrMapRouteStroke = useRidrMapRouteStroke(isDark, colors.accent, colors.text);
+  const requestModalRoutePulseTint = useMemo(() => (isDark ? '#c084fc' : '#7c3aed'), [isDark]);
 
   const driverHomeInitialRegion = useMemo(
     () => ({
@@ -543,6 +617,7 @@ export default function DriverHomeScreen() {
       headerOverlay: colors.headerOverlay,
       tabActive: colors.tabActive,
       tabInactive: colors.tabInactive,
+      accent: colors.accent,
       ctaBg: colors.primary,
       ctaText: colors.textOnPrimary,
       success: colors.success,
@@ -686,6 +761,63 @@ export default function DriverHomeScreen() {
     setProfileUsername(user?.staffCode ?? '');
   }, [user?.email, user?.firstName, user?.lastName, user?.staffCode]);
 
+  const applyRideDigest = useCallback((rideRequests: RideRequestDto[]) => {
+    const toDriverStatus = (s: string): DriverTripStatus =>
+      s === 'matched'
+        ? 'matched'
+        : s === 'arrived'
+          ? 'arrived'
+          : s === 'completed'
+            ? 'completed'
+            : s === 'cancelled'
+              ? 'cancelled'
+              : 'in_trip';
+
+    const active = rideRequests.find((r) => ['matched', 'arrived', 'in_trip', 'in_progress'].includes(r.status));
+    if (active) {
+      const status = toDriverStatus(active.status);
+      const base = dtoToIncomingRequest(active);
+      setCurrentTrip((prev) =>
+        prev && prev.id === active.id
+          ? prev
+          : {
+              ...base,
+              status,
+              startPin: generateTripStartPin(),
+              acceptedAtMs: Date.now(),
+              ...(status === 'arrived' ? { arrivedAtMs: Date.now() } : {}),
+              ...(status === 'in_trip' ? { startedAtMs: Date.now() } : {}),
+            }
+      );
+    } else {
+      setCurrentTrip(null);
+    }
+
+    const incoming = rideRequests
+      .filter((r) => isPoolOffer(r))
+      .map(dtoToIncomingRequest)
+      .filter((r) => r.id !== active?.id);
+    setIncomingRequests(incoming);
+
+    const completed = rideRequests
+      .filter((r) => r.status === 'completed')
+      .slice(0, 20)
+      .map(
+        (r): CompletedTrip => ({
+          id: r.id,
+          riderName: riderNameFromDto(r),
+          route: `${r.pickup?.address ?? 'Pickup'} to ${r.dropoff?.address ?? 'Dropoff'}`,
+          fare: rideFareLabel(r),
+          when: r.updatedAt ? new Date(r.updatedAt).toLocaleString() : '—',
+        })
+      );
+    setCompletedTrips(completed);
+  }, []);
+
+  useEffect(() => {
+    driverLocRef.current = driverLiveLocation;
+  }, [driverLiveLocation]);
+
   useEffect(() => {
     if (!user) {
       setIncomingRequests([]);
@@ -696,70 +828,9 @@ export default function DriverHomeScreen() {
     let cancelled = false;
     void (async () => {
       try {
-        const { rideRequests } = await listMyRideRequests();
+        const rideRequests = await fetchInboundRideRequests(null);
         if (cancelled) return;
-
-        const toIncomingRequest = (r: RideRequestDto): IncomingRequest => ({
-          id: r.id,
-          riderName: 'Rider',
-          pickup: r.pickup.address ?? 'Pickup',
-          pickupCoordinate: ridePointToLatLng(r.pickup),
-          dropoff: r.dropoff.address ?? 'Dropoff',
-          dropoffCoordinate: ridePointToLatLng(r.dropoff),
-          fare: rideFareLabel(r),
-          eta: rideEtaLabel(r),
-          distance: rideDistanceLabel(r),
-          paymentLabel: r.payment?.method === 'cash' ? 'Cash' : 'Card',
-        });
-
-        const toDriverStatus = (s: string): DriverTripStatus =>
-          s === 'matched'
-            ? 'matched'
-            : s === 'arrived'
-              ? 'arrived'
-              : s === 'completed'
-                ? 'completed'
-                : s === 'cancelled'
-                  ? 'cancelled'
-                  : 'in_trip';
-
-        const active = rideRequests.find((r) => ['matched', 'arrived', 'in_trip', 'in_progress'].includes(r.status));
-        if (active) {
-          const status = toDriverStatus(active.status);
-          const base = toIncomingRequest(active);
-          setCurrentTrip((prev) =>
-            prev && prev.id === active.id
-              ? prev
-              : {
-                  ...base,
-                  status,
-                  startPin: generateTripStartPin(),
-                  acceptedAtMs: Date.now(),
-                  ...(status === 'arrived' ? { arrivedAtMs: Date.now() } : {}),
-                  ...(status === 'in_trip' ? { startedAtMs: Date.now() } : {}),
-                }
-          );
-        } else {
-          setCurrentTrip(null);
-        }
-
-        const incoming = rideRequests
-          .filter((r) => ['searching', 'matched', 'arrived'].includes(r.status))
-          .map(toIncomingRequest)
-          .filter((r) => r.id !== active?.id);
-        setIncomingRequests(incoming);
-
-        const completed = rideRequests
-          .filter((r) => r.status === 'completed')
-          .slice(0, 20)
-          .map((r): CompletedTrip => ({
-            id: r.id,
-            riderName: 'Rider',
-            route: `${r.pickup.address ?? 'Pickup'} to ${r.dropoff.address ?? 'Dropoff'}`,
-            fare: rideFareLabel(r),
-            when: r.updatedAt ? new Date(r.updatedAt).toLocaleString() : '—',
-          }));
-        setCompletedTrips(completed);
+        applyRideDigest(rideRequests);
       } catch {
         if (!cancelled) {
           setIncomingRequests([]);
@@ -770,7 +841,58 @@ export default function DriverHomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, applyRideDigest]);
+
+  /** While online: refresh GPS and push presence/location every 2 seconds. */
+  useEffect(() => {
+    if (!user || !isOnline) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      let coords = driverLocRef.current;
+      try {
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        driverLocRef.current = coords;
+        if (!cancelled) setDriverLiveLocation(coords);
+      } catch {
+        /* use last known location when fresh read fails */
+      }
+
+      if (coords) {
+        void patchDriverCurrentLocationOnServer({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        });
+        void patchDriverPresenceOnServer({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          isAvailable: true,
+        });
+      }
+      try {
+        const rideRequests = await fetchInboundRideRequests(coords);
+        if (!cancelled) applyRideDigest(rideRequests);
+      } catch {
+        /* non-fatal */
+      }
+    };
+
+    void tick();
+    const id = setInterval(() => {
+      void tick();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [user, isOnline, applyRideDigest]);
+
+  useEffect(() => {
+    if (!user || isOnline) return;
+    const c = driverLocRef.current;
+    if (c) void patchDriverPresenceOnServer({ latitude: c.latitude, longitude: c.longitude, isAvailable: false });
+  }, [user, isOnline]);
 
   useEffect(() => {
     setEditingFirstName(profileFirstName);
@@ -853,6 +975,11 @@ export default function DriverHomeScreen() {
       lineDashPattern: undefined,
     };
   })();
+  const driverRoutePulseTint = useMemo(() => {
+    if (currentTrip?.status === 'matched') return isDark ? '#e9d5ff' : '#7c3aed';
+    if (currentTrip?.status === 'arrived' || currentTrip?.status === 'in_trip') return isDark ? '#86efac' : '#22c55e';
+    return isDark ? '#c084fc' : '#7c3aed';
+  }, [currentTrip?.status, isDark]);
   const driverMarker =
     (driverLiveLocation ?? currentTrip?.pickupCoordinate) ?? {
       latitude: KSA_MAP_CENTER.latitude + 0.008,
@@ -1502,16 +1629,24 @@ export default function DriverHomeScreen() {
     if (!request || (currentTrip && currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled')) {
       return;
     }
-    hapticMedium();
-    setRequestModalVisible(false);
-    setCurrentTripExpanded(true);
-    setCurrentTrip({
-      ...request,
-      status: 'matched',
-      startPin: '12345',
-      acceptedAtMs: Date.now(),
-    });
-    setIncomingRequests((prev) => prev.filter((item) => item.id !== requestId));
+    void (async () => {
+      const res = await tryAcceptRideAsDriver(requestId);
+      if (!res.ok) {
+        Alert.alert('Could not accept ride', res.message ?? 'Try again.');
+        return;
+      }
+      hapticMedium();
+      setRequestModalVisible(false);
+      setCurrentTripExpanded(true);
+      const base = res.rideRequest ? dtoToIncomingRequest(res.rideRequest) : request;
+      setCurrentTrip({
+        ...base,
+        status: 'matched',
+        startPin: generateTripStartPin(),
+        acceptedAtMs: Date.now(),
+      });
+      setIncomingRequests((prev) => prev.filter((item) => item.id !== requestId));
+    })();
   };
 
   const handleDecline = (requestId: string) => {
@@ -2262,26 +2397,13 @@ export default function DriverHomeScreen() {
             }}
           >
             {hasDistinctPickupDrop ? (
-              <>
-                <Polyline
-                  coordinates={homeRoutePolylineCoords}
-                  strokeColor={mapRouteGuide.outerColor}
-                  strokeWidth={9}
-                  lineCap="round"
-                  lineJoin="round"
-                  geodesic={false}
-                  lineDashPattern={mapRouteGuide.lineDashPattern}
-                />
-                <Polyline
-                  coordinates={homeRoutePolylineCoords}
-                  strokeColor={mapRouteGuide.innerColor}
-                  strokeWidth={6}
-                  lineCap="round"
-                  lineJoin="round"
-                  geodesic={false}
-                  lineDashPattern={mapRouteGuide.lineDashPattern}
-                />
-              </>
+              <PulseRoutePolylines
+                coordinates={homeRoutePolylineCoords}
+                baseOuter={mapRouteGuide.outerColor}
+                baseInner={mapRouteGuide.innerColor}
+                pulseTint={driverRoutePulseTint}
+                geodesic={false}
+              />
             ) : null}
             {currentTrip ? (
               <Marker coordinate={mapPickup} anchor={{ x: 0.5, y: 1.9 }} tracksViewChanges={false}>
@@ -2593,6 +2715,8 @@ export default function DriverHomeScreen() {
           onPress={() => {
             hapticMedium();
             if (isOnline) {
+              const c = driverLocRef.current;
+              if (c) void patchDriverPresenceOnServer({ latitude: c.latitude, longitude: c.longitude, isAvailable: false });
               setIsOnline(false);
               return;
             }
@@ -2604,6 +2728,19 @@ export default function DriverHomeScreen() {
                   { text: 'Open Settings', onPress: () => void Linking.openSettings() },
                 ]);
                 return;
+              }
+              try {
+                const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                const ll = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+                driverLocRef.current = ll;
+                setDriverLiveLocation(ll);
+                await patchDriverCurrentLocationOnServer({
+                  latitude: ll.latitude,
+                  longitude: ll.longitude,
+                });
+                await patchDriverPresenceOnServer({ latitude: ll.latitude, longitude: ll.longitude, isAvailable: true });
+              } catch {
+                /* presence retries while online */
               }
               setIsOnline(true);
             })();
@@ -2698,20 +2835,11 @@ export default function DriverHomeScreen() {
                       Math.abs(request.pickupCoordinate.longitude - request.dropoffCoordinate.longitude) * 2.4 + 0.025,
                   }}
                 >
-                  <Polyline
+                  <PulseRoutePolylines
                     coordinates={modalRouteCoords}
-                    strokeColor={ridrMapRouteStroke.outer}
-                    strokeWidth={7}
-                    lineCap="round"
-                    lineJoin="round"
-                    geodesic={false}
-                  />
-                  <Polyline
-                    coordinates={modalRouteCoords}
-                    strokeColor={ridrMapRouteStroke.inner}
-                    strokeWidth={5}
-                    lineCap="round"
-                    lineJoin="round"
+                    baseOuter={ridrMapRouteStroke.outer}
+                    baseInner={ridrMapRouteStroke.inner}
+                    pulseTint={requestModalRoutePulseTint}
                     geodesic={false}
                   />
                   <Marker coordinate={request.pickupCoordinate} anchor={{ x: 0.5, y: 0.5 }}>

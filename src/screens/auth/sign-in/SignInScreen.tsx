@@ -131,7 +131,17 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
             isTemporaryPassword: true,
           });
         } else {
-          const nextMode: AppMode = result.role === 'driver' ? 'driver' : targetMode;
+          let nextMode: AppMode = targetMode;
+          if (targetMode === 'driver') {
+            const eligible = result.driversDocEligible;
+            nextMode = eligible ? 'driver' : 'rider';
+            if (!eligible) {
+              showAuthError(
+                'Driver mode',
+                'Your driver application is not approved yet. You can continue as a rider.'
+              );
+            }
+          }
           try {
             await setAppMode(nextMode);
           } catch (modeErr) {
@@ -267,7 +277,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
                 value={loginIdentifier}
                 onChangeText={setLoginIdentifier}
                 placeholder="you@example.com or R001"
-                autoCapitalize="characters"
+                autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="default"
                 autoComplete="username"
@@ -278,7 +288,7 @@ export default function SignInScreen({ navigation, route }: AuthEntryProps) {
                 label="Email address"
                 icon="mail-outline"
                 value={email}
-                onChangeText={setEmail}
+                onChangeText={(t) => setEmail(t.toLowerCase())}
                 placeholder="you@example.com"
                 keyboardType="email-address"
                 autoCapitalize="none"

@@ -2,6 +2,10 @@ export { getApiBaseUrl, getDefaultRideTypeSlug } from './config';
 export { postPaymentsTokenize } from './payments';
 export type { PaymentsTokenizeRequest, PaymentsTokenizeSource } from './payments';
 export { countDriversInNearbyResponse, getNearbyDrivers } from './drivers';
+export {
+  fetchDriversMeApplicationStatus,
+  pickDriversCollectionApplicationStatus,
+} from './driverProfile';
 export { apiRequest } from './http';
 export {
   createPaymentMethod,
@@ -28,6 +32,13 @@ export type {
   KingstonZoneFareEstimateRequest,
   RideRequestDto,
 } from './rides';
+export {
+  patchDriverCurrentLocationOnServer,
+  fetchInboundRideRequests,
+  normalizeRideRequestListEnvelope,
+  patchDriverPresenceOnServer,
+  tryAcceptRideAsDriver,
+} from './driverRides';
 export { submitDriverApplication } from './driverApplications';
 export type {
   DriverApplicationUploadCategory,

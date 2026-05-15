@@ -16,6 +16,8 @@ export type BecomeDriverUploadItem = {
   mimeType?: string;
   size?: number;
   kind: UploadKind;
+  /** License card side when `kind === 'license'` (photos only). */
+  licenseSide?: 'front' | 'back';
 };
 
 type Props = {
@@ -25,20 +27,33 @@ type Props = {
   onSubmit: (uploads: BecomeDriverUploadItem[]) => Promise<void>;
 };
 
-const MAX_UPLOADS = 4;
+const MAX_UPLOADS = 8;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 12 * 1024 * 1024;
-const DOC_TYPES = [
+
+/** Qualification: PDF and DOCX only. */
+const QUALIFICATION_TYPES = [
   'application/pdf',
-  'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-];
+] as const;
+
+const IMAGE_PICKER_COMMON: ImagePicker.ImagePickerOptions = {
+  mediaTypes: ['images'],
+  allowsEditing: false,
+  quality: 0.72,
+};
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes <= 0) return 'Unknown size';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatLicenseSubtitle(item: BecomeDriverUploadItem): string {
+  if (item.kind !== 'license') return item.kind.toUpperCase();
+  const side = item.licenseSide === 'back' ? 'Back' : item.licenseSide === 'front' ? 'Front' : 'License';
+  return `LICENSE • ${side}`;
 }
 
 export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
@@ -53,42 +68,84 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
     };
   }, [uploads]);
 
+  const hasLicenseFront = uploads.some((i) => i.kind === 'license' && i.licenseSide === 'front');
+  const hasLicenseBack = uploads.some((i) => i.kind === 'license' && i.licenseSide === 'back');
+
   const canAddMore = uploads.length < MAX_UPLOADS;
-  const isComplete = counts.license > 0 && counts.qualification > 0 && counts.vehicle > 0;
+  const isComplete =
+    hasLicenseFront && hasLicenseBack && counts.qualification > 0 && counts.vehicle > 0;
   const totalUploadBytes = uploads.reduce((sum, item) => sum + (item.size ?? 0), 0);
+
+  const assertCanAdd = (prev: BecomeDriverUploadItem[], next: BecomeDriverUploadItem): boolean => {
+    if ((next.size ?? 0) > MAX_FILE_BYTES) {
+      Alert.alert(
+        'File too large',
+        `Each file must be ${Math.round(MAX_FILE_BYTES / (1024 * 1024))}MB or less.`
+      );
+      return false;
+    }
+    if (prev.length >= MAX_UPLOADS) {
+      Alert.alert('Upload limit reached', `You can upload up to ${MAX_UPLOADS} files.`);
+      return false;
+    }
+    const nextTotalBytes = prev.reduce((sum, item) => sum + (item.size ?? 0), 0) + (next.size ?? 0);
+    if (nextTotalBytes > MAX_TOTAL_BYTES) {
+      Alert.alert(
+        'Upload set too large',
+        `Total upload size must stay under ${Math.round(MAX_TOTAL_BYTES / (1024 * 1024))}MB.`
+      );
+      return false;
+    }
+    return true;
+  };
 
   const pushUpload = (next: BecomeDriverUploadItem) => {
     setUploads((prev) => {
-      if (prev.length >= MAX_UPLOADS) {
-        Alert.alert('Upload limit reached', `You can upload up to ${MAX_UPLOADS} files.`);
-        return prev;
-      }
-      if ((next.size ?? 0) > MAX_FILE_BYTES) {
-        Alert.alert(
-          'File too large',
-          `Each file must be ${Math.round(MAX_FILE_BYTES / (1024 * 1024))}MB or less.`
-        );
-        return prev;
-      }
-      const nextTotalBytes = prev.reduce((sum, item) => sum + (item.size ?? 0), 0) + (next.size ?? 0);
-      if (nextTotalBytes > MAX_TOTAL_BYTES) {
-        Alert.alert(
-          'Upload set too large',
-          `Total upload size must stay under ${Math.round(MAX_TOTAL_BYTES / (1024 * 1024))}MB.`
-        );
-        return prev;
-      }
+      if (!assertCanAdd(prev, next)) return prev;
       return [next, ...prev];
     });
   };
 
-  const pickDocument = async (kind: UploadKind) => {
+  const pushLicensePhoto = (side: 'front' | 'back', image: ImagePicker.ImagePickerAsset) => {
+    const nextItem: BecomeDriverUploadItem = {
+      id: `${Date.now()}-${Math.random()}`,
+      kind: 'license',
+      licenseSide: side,
+      name: image.fileName ?? `License (${side === 'front' ? 'front' : 'back'})`,
+      uri: image.uri,
+      mimeType: image.mimeType ?? 'image/jpeg',
+      size: image.fileSize ?? undefined,
+    };
+    setUploads((prev) => {
+      const base = prev.filter((p) => !(p.kind === 'license' && p.licenseSide === side));
+      if (!assertCanAdd(base, nextItem)) return prev;
+      return [nextItem, ...base];
+    });
+  };
+
+  const pushVehiclePhoto = (image: ImagePicker.ImagePickerAsset) => {
+    const nextItem: BecomeDriverUploadItem = {
+      id: `${Date.now()}-${Math.random()}`,
+      kind: 'vehicle',
+      name: image.fileName ?? 'Vehicle photo',
+      uri: image.uri,
+      mimeType: image.mimeType ?? 'image/jpeg',
+      size: image.fileSize ?? undefined,
+    };
+    setUploads((prev) => {
+      const base = prev.filter((p) => p.kind !== 'vehicle');
+      if (!assertCanAdd(base, nextItem)) return prev;
+      return [nextItem, ...base];
+    });
+  };
+
+  const pickDocumentQualification = async () => {
     if (!canAddMore) {
       Alert.alert('Upload limit reached', `You can upload up to ${MAX_UPLOADS} files.`);
       return;
     }
     const result = await DocumentPicker.getDocumentAsync({
-      type: DOC_TYPES,
+      type: [...QUALIFICATION_TYPES],
       copyToCacheDirectory: true,
       multiple: false,
     });
@@ -97,7 +154,7 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
     if (!doc) return;
     pushUpload({
       id: `${Date.now()}-${Math.random()}`,
-      kind,
+      kind: 'qualification',
       name: doc.name ?? 'Document',
       uri: doc.uri,
       mimeType: doc.mimeType ?? undefined,
@@ -105,35 +162,81 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
     });
   };
 
-  const pickPhoto = async () => {
-    if (!canAddMore) {
-      Alert.alert('Upload limit reached', `You can upload up to ${MAX_UPLOADS} files.`);
-      return;
-    }
-
+  const ensureLibraryPermission = async (): Promise<boolean> => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Photos permission needed', 'Please allow photo library access to upload vehicle photos.');
-      return;
+      Alert.alert('Photos permission needed', 'Please allow photo library access to choose images.');
+      return false;
     }
+    return true;
+  };
 
+  const ensureCameraPermission = async (): Promise<boolean> => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Camera needed', 'Please allow camera access to take photos.');
+      return false;
+    }
+    return true;
+  };
+
+  const launchLicenseCamera = async (side: 'front' | 'back') => {
+    if (!(await ensureCameraPermission())) return;
+    const result = await ImagePicker.launchCameraAsync(IMAGE_PICKER_COMMON);
+    if (result.canceled) return;
+    const image = result.assets[0];
+    if (!image) return;
+    pushLicensePhoto(side, image);
+  };
+
+  const launchLicenseLibrary = async (side: 'front' | 'back') => {
+    if (!(await ensureLibraryPermission())) return;
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.5,
+      ...IMAGE_PICKER_COMMON,
       selectionLimit: 1,
     });
     if (result.canceled) return;
     const image = result.assets[0];
     if (!image) return;
-    pushUpload({
-      id: `${Date.now()}-${Math.random()}`,
-      kind: 'vehicle',
-      name: image.fileName ?? 'Vehicle photo',
-      uri: image.uri,
-      mimeType: image.mimeType ?? 'image/jpeg',
-      size: image.fileSize ?? undefined,
+    pushLicensePhoto(side, image);
+  };
+
+  const pickLicenseSide = (side: 'front' | 'back') => {
+    const label = side === 'front' ? 'front' : 'back';
+    Alert.alert(`Driver license (${label})`, 'Choose how to add this photo.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Take photo', onPress: () => void launchLicenseCamera(side) },
+      { text: 'Photo library', onPress: () => void launchLicenseLibrary(side) },
+    ]);
+  };
+
+  const launchVehicleCamera = async () => {
+    if (!(await ensureCameraPermission())) return;
+    const result = await ImagePicker.launchCameraAsync(IMAGE_PICKER_COMMON);
+    if (result.canceled) return;
+    const image = result.assets[0];
+    if (!image) return;
+    pushVehiclePhoto(image);
+  };
+
+  const launchVehicleLibrary = async () => {
+    if (!(await ensureLibraryPermission())) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      ...IMAGE_PICKER_COMMON,
+      selectionLimit: 1,
     });
+    if (result.canceled) return;
+    const image = result.assets[0];
+    if (!image) return;
+    pushVehiclePhoto(image);
+  };
+
+  const pickVehiclePhoto = () => {
+    Alert.alert('Vehicle photo', 'Choose how to add your vehicle photo.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Take photo', onPress: () => void launchVehicleCamera() },
+      { text: 'Photo library', onPress: () => void launchVehicleLibrary() },
+    ]);
   };
 
   const removeUpload = (id: string) => {
@@ -144,7 +247,7 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
     if (!isComplete) {
       Alert.alert(
         'Missing uploads',
-        'Please upload your driver license, at least one vehicle qualification document, and a vehicle photo.'
+        'Please add license photos (front and back), at least one qualification file (PDF or DOCX), and a vehicle photo.'
       );
       return;
     }
@@ -169,29 +272,35 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
 
       <ScrollView style={styles.editProfileScroll} contentContainerStyle={styles.editProfileScrollContent} showsVerticalScrollIndicator={false}>
         <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 20 }]}>
-          Upload up to {MAX_UPLOADS} files to start your driver application.
+          Upload up to {MAX_UPLOADS} files: license (2 photos), qualification (PDF/DOCX), and vehicle photo.
         </Text>
         <Text style={[styles.tabSectionLabel, { color: ui.textMuted, marginTop: 4 }]}>
           Max {Math.round(MAX_FILE_BYTES / (1024 * 1024))}MB per file, {Math.round(MAX_TOTAL_BYTES / (1024 * 1024))}MB total.
         </Text>
 
         <View style={[styles.tabCard, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => void pickDocument('license')}>
-            <Ionicons name="card-outline" size={20} color={ui.text} />
-            <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Driver license (PDF/DOC/DOCX)</Text>
-            <Ionicons name="add-circle-outline" size={20} color={ui.textMuted} />
+          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => pickLicenseSide('front')}>
+            <Ionicons name="id-card-outline" size={20} color={ui.text} />
+            <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Driver license — front (photo)</Text>
+            <Ionicons name="camera-outline" size={20} color={ui.textMuted} />
           </Pressable>
           <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => void pickDocument('qualification')}>
+          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => pickLicenseSide('back')}>
+            <Ionicons name="id-card-outline" size={20} color={ui.text} />
+            <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Driver license — back (photo)</Text>
+            <Ionicons name="camera-outline" size={20} color={ui.textMuted} />
+          </Pressable>
+          <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
+          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => void pickDocumentQualification()}>
             <Ionicons name="document-text-outline" size={20} color={ui.text} />
-            <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Car qualification docs (PDF/DOC/DOCX)</Text>
+            <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Qualification (PDF or DOCX)</Text>
             <Ionicons name="add-circle-outline" size={20} color={ui.textMuted} />
           </Pressable>
           <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
-          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => void pickPhoto()}>
-            <Ionicons name="camera-outline" size={20} color={ui.text} />
+          <Pressable style={[styles.settingsRow, { paddingVertical: 16 }]} onPress={() => pickVehiclePhoto()}>
+            <Ionicons name="car-outline" size={20} color={ui.text} />
             <Text style={[styles.settingsRowLabel, { color: ui.text }]}>Vehicle photo</Text>
-            <Ionicons name="add-circle-outline" size={20} color={ui.textMuted} />
+            <Ionicons name="camera-outline" size={20} color={ui.textMuted} />
           </Pressable>
         </View>
 
@@ -204,12 +313,20 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
           </View>
           <View style={[styles.tabDivider, { backgroundColor: ui.divider }]} />
           <View style={[styles.settingsRow, { paddingVertical: 12 }]}>
-            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>License: {counts.license > 0 ? 'Added' : 'Missing'}</Text>
-            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>Qualifications: {counts.qualification > 0 ? 'Added' : 'Missing'}</Text>
+            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>
+              License front: {hasLicenseFront ? 'Added' : 'Missing'}
+            </Text>
+            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>
+              License back: {hasLicenseBack ? 'Added' : 'Missing'}
+            </Text>
           </View>
           <View style={[styles.settingsRow, { paddingVertical: 12 }]}>
-            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>Vehicle Photo: {counts.vehicle > 0 ? 'Added' : 'Missing'}</Text>
-            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>Max: {MAX_UPLOADS}</Text>
+            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>
+              Qualifications: {counts.qualification > 0 ? 'Added' : 'Missing'}
+            </Text>
+            <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>
+              Vehicle photo: {counts.vehicle > 0 ? 'Added' : 'Missing'}
+            </Text>
           </View>
           <View style={[styles.settingsRow, { paddingVertical: 12 }]}>
             <Text style={[styles.settingsRowLabel, { color: ui.textMuted }]}>Payload Size</Text>
@@ -225,7 +342,7 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
               <View key={item.id}>
                 <View style={[styles.settingsRow, { paddingVertical: 14 }]}>
                   <Ionicons
-                    name={item.kind === 'vehicle' ? 'image-outline' : 'document-outline'}
+                    name={item.kind === 'vehicle' || item.kind === 'license' ? 'image-outline' : 'document-outline'}
                     size={20}
                     color={ui.text}
                   />
@@ -234,7 +351,9 @@ export function BecomeDriverScreen({ ui, isDark, onBack, onSubmit }: Props) {
                       {item.name}
                     </Text>
                     <Text style={{ color: ui.textMuted, fontSize: 12 }}>
-                      {item.kind.toUpperCase()} • {formatBytes(item.size)}
+                      {item.kind === 'license'
+                        ? `${formatLicenseSubtitle(item)} • ${formatBytes(item.size)}`
+                        : `${item.kind.toUpperCase()} • ${formatBytes(item.size)}`}
                     </Text>
                   </View>
                   <Pressable onPress={() => removeUpload(item.id)} hitSlop={8}>

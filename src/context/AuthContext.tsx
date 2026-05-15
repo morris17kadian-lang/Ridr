@@ -2,7 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
+import { fetchDriversMeApplicationStatus } from '../api/driverProfile';
 import { getApiBaseUrl } from '../api/config';
+import {
+  clearProfileIdentityFromStorage,
+  DRIVER_PROFILE_CACHE_KEY,
+} from '../lib/appCacheStorage';
+import { isDriverApplicationApprovedNormalized } from '../lib/driverApplicationGate';
 import { ensureDriverLocationReady } from '../lib/driverLocationRequirement';
 
 export const AUTH_SESSION_KEY = 'ridr_auth_session_v1';
@@ -24,7 +30,12 @@ export type AuthUser = {
 };
 
 export type SignInResult =
-  | { status: 'signed-in'; role: AppUserRole }
+  | {
+      status: 'signed-in';
+      role: AppUserRole;
+      /** From `drivers.applicationStatus` via `GET /drivers/me`; not derived from user.role. */
+      driversDocEligible: boolean;
+    }
   | {
       status: 'password-reset-required';
       identifier: string;
@@ -44,6 +55,10 @@ type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
   appMode: AppMode;
+  /** `drivers.applicationStatus` satisfies approved bucket (via `GET /drivers/me`). */
+  driverModeEligible: boolean;
+  /** Refetch signed-in driver's Mongo document; returning whether approved for Driver mode. */
+  refreshDriverProfile: () => Promise<boolean>;
   setAppMode: (mode: AppMode) => Promise<void>;
   setUserRole: (role: AppUserRole) => Promise<void>;
   signIn: (identifier: string, password: string) => Promise<SignInResult>;
@@ -60,8 +75,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [appMode, setAppModeState] = useState<AppMode>('rider');
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  /** Canonical driver onboarding state: Mongo `drivers.applicationStatus`. */
+  const [driversCollectionApplicationStatus, setDriversCollectionApplicationStatus] = useState<string | null>(null);
 
   const baseUrl = useMemo(() => getApiBaseUrl(), []);
+
+  const driverModeEligible = useMemo(
+    () => isDriverApplicationApprovedNormalized(driversCollectionApplicationStatus),
+    [driversCollectionApplicationStatus]
+  );
 
   type AuthSession = {
     user: AuthUser;
@@ -134,24 +156,84 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+    await AsyncStorage.removeItem(DRIVER_PROFILE_CACHE_KEY);
     setUser(null);
     setAccessToken(null);
     setRefreshToken(null);
+    setDriversCollectionApplicationStatus(null);
   }, []);
 
-  const setAppMode = useCallback(async (mode: AppMode) => {
-    if (mode === 'driver') {
-      if (user?.role !== 'driver') {
-        throw new Error('Your account is not yet approved for Driver mode.');
-      }
-      const loc = await ensureDriverLocationReady();
-      if (!loc.ok) {
-        throw new Error(loc.message);
-      }
+  const refreshDriverProfile = useCallback(async (): Promise<boolean> => {
+    if (!baseUrl) return false;
+    const sessionRaw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
+    if (!sessionRaw) {
+      setDriversCollectionApplicationStatus(null);
+      return false;
     }
-    setAppModeState(mode);
-    await AsyncStorage.setItem(APP_MODE_KEY, mode);
-  }, [user?.role]);
+    let sessionParsed: Record<string, unknown>;
+    try {
+      sessionParsed = JSON.parse(sessionRaw) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    const u = sessionParsed.user as { uid?: string; id?: string } | undefined;
+    const uidRaw = u?.uid ?? u?.id;
+    const uid =
+      typeof uidRaw === 'string' && uidRaw.trim()
+        ? uidRaw.trim()
+        : typeof uidRaw === 'number' && Number.isFinite(uidRaw)
+          ? String(uidRaw)
+          : null;
+    const at = typeof sessionParsed.accessToken === 'string' ? sessionParsed.accessToken : null;
+    const rt =
+      typeof sessionParsed.refreshToken === 'string' ? sessionParsed.refreshToken : undefined;
+    if (!uid || !at) {
+      setDriversCollectionApplicationStatus(null);
+      return false;
+    }
+    try {
+      const { applicationStatusLower } = await fetchDriversMeApplicationStatus(
+        { accessToken: at, refreshToken: rt },
+        async (a, r) => {
+          const latest = JSON.parse(
+            (await AsyncStorage.getItem(AUTH_SESSION_KEY)) ?? '{}'
+          ) as Record<string, unknown>;
+          await AsyncStorage.setItem(
+            AUTH_SESSION_KEY,
+            JSON.stringify({ ...latest, accessToken: a, refreshToken: r })
+          );
+          setAccessToken(a);
+          setRefreshToken(r);
+        }
+      );
+      setDriversCollectionApplicationStatus(applicationStatusLower);
+      await AsyncStorage.setItem(
+        DRIVER_PROFILE_CACHE_KEY,
+        JSON.stringify({ uid, applicationStatusLower })
+      );
+      return isDriverApplicationApprovedNormalized(applicationStatusLower);
+    } catch {
+      return false;
+    }
+  }, [baseUrl]);
+
+  const setAppMode = useCallback(
+    async (mode: AppMode) => {
+      if (mode === 'driver') {
+        const eligible = await refreshDriverProfile();
+        if (!eligible) {
+          throw new Error('Your account is not yet approved for Driver mode.');
+        }
+        const loc = await ensureDriverLocationReady();
+        if (!loc.ok) {
+          throw new Error(loc.message);
+        }
+      }
+      setAppModeState(mode);
+      await AsyncStorage.setItem(APP_MODE_KEY, mode);
+    },
+    [refreshDriverProfile]
+  );
 
   const setUserRole = useCallback(async (role: AppUserRole) => {
     setUser((prev) => (prev ? { ...prev, role } : prev));
@@ -226,24 +308,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      let gateEligibleForDriverUi = false;
+
       try {
         const [raw, savedMode] = await Promise.all([
           AsyncStorage.getItem(AUTH_SESSION_KEY),
           AsyncStorage.getItem(APP_MODE_KEY),
         ]);
-        if (savedMode === 'rider' || savedMode === 'driver') {
-          if (savedMode === 'driver') {
-            const loc = await ensureDriverLocationReady();
-            if (loc.ok) {
-              setAppModeState('driver');
-            } else {
-              setAppModeState('rider');
-              await AsyncStorage.setItem(APP_MODE_KEY, 'rider');
-            }
-          } else {
-            setAppModeState('rider');
-          }
-        }
+
         if (raw) {
           try {
             const parsed = JSON.parse(raw) as Partial<AuthSession> | null;
@@ -268,6 +340,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 ...(typeof parsed.user.phone === 'string' ? { phone: parsed.user.phone } : {}),
               };
 
+              try {
+                const dRaw = await AsyncStorage.getItem(DRIVER_PROFILE_CACHE_KEY);
+                if (dRaw) {
+                  const o = JSON.parse(dRaw) as {
+                    uid?: string;
+                    applicationStatusLower?: string | null;
+                  };
+                  if (o.uid === restoredUser.uid) {
+                    const st = typeof o.applicationStatusLower === 'string' ? o.applicationStatusLower : null;
+                    setDriversCollectionApplicationStatus(st);
+                  }
+                }
+              } catch {
+                /* stale cache */
+              }
+
               if (!isTokenExpiredOrNearExpiry(parsed.accessToken)) {
                 await persistSession({
                   user: restoredUser,
@@ -285,16 +373,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   refreshToken: refreshed.refreshToken,
                 });
               }
+
+              gateEligibleForDriverUi = await refreshDriverProfile();
             }
           } catch {
             await AsyncStorage.removeItem(AUTH_SESSION_KEY);
+          }
+        }
+
+        if (savedMode === 'rider' || savedMode === 'driver') {
+          if (savedMode === 'driver') {
+            if (!gateEligibleForDriverUi) {
+              setAppModeState('rider');
+              await AsyncStorage.setItem(APP_MODE_KEY, 'rider');
+            } else {
+              const loc = await ensureDriverLocationReady();
+              if (loc.ok) {
+                setAppModeState('driver');
+              } else {
+                setAppModeState('rider');
+                await AsyncStorage.setItem(APP_MODE_KEY, 'rider');
+              }
+            }
+          } else {
+            setAppModeState('rider');
           }
         }
       } finally {
         setLoading(false);
       }
     })();
-  }, [isTokenExpiredOrNearExpiry, persistSession, requestJson]);
+  }, [isTokenExpiredOrNearExpiry, persistSession, refreshDriverProfile, requestJson]);
 
   const signIn = useCallback(
     async (identifier: string, password: string): Promise<SignInResult> => {
@@ -329,9 +438,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refreshToken: data.refreshToken,
       });
 
-      return { status: 'signed-in', role: data.user.role === 'driver' ? 'driver' : 'user' };
+      const driversDocEligible = await refreshDriverProfile();
+
+      return {
+        status: 'signed-in',
+        role: data.user.role === 'driver' ? 'driver' : 'user',
+        driversDocEligible,
+      };
     },
-    [persistSession, requestJson, toAuthUser]
+    [persistSession, refreshDriverProfile, requestJson, toAuthUser]
   );
 
   const signUp = useCallback(
@@ -355,11 +470,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         accessToken: data.accessToken,
         refreshToken: data.refreshToken,
       });
+      void refreshDriverProfile();
     },
-    [persistSession, requestJson, toAuthUser]
+    [persistSession, refreshDriverProfile, requestJson, toAuthUser]
   );
 
   const signOut = useCallback(async () => {
+    await clearProfileIdentityFromStorage();
     await persistSession(null);
   }, [persistSession]);
 
@@ -372,6 +489,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       loading,
       appMode,
+      driverModeEligible,
+      refreshDriverProfile,
       setAppMode,
       signIn,
       signUp,
@@ -379,7 +498,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserRole,
       markPasswordResetSent,
     }),
-    [user, loading, appMode, setAppMode, signIn, signUp, signOut, setUserRole, markPasswordResetSent]
+    [
+      user,
+      loading,
+      appMode,
+      driverModeEligible,
+      refreshDriverProfile,
+      setAppMode,
+      signIn,
+      signUp,
+      signOut,
+      setUserRole,
+      markPasswordResetSent,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -11,6 +11,8 @@ export type MainScreenUi = {
   headerOverlay: string;
   tabActive: string;
   tabInactive: string;
+  /** Brand accent — maps, chips (matches theme `colors.accent`). */
+  accent: string;
   ctaBg: string;
   ctaText: string;
   success: string;

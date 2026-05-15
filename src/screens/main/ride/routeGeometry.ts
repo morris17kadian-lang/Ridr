@@ -54,3 +54,26 @@ export function interpolateRoutePoint(route: LatLng[], progress: number): LatLng
 
   return route[route.length - 1];
 }
+
+/** Geographic bearing from `a` to `b` in degrees; 0 = north, clockwise. */
+export function bearingBetweenPoints(a: LatLng, b: LatLng): number {
+  const φ1 = (a.latitude * Math.PI) / 180;
+  const φ2 = (b.latitude * Math.PI) / 180;
+  const Δλ = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  let θ = (Math.atan2(y, x) * 180) / Math.PI;
+  θ = (θ + 360) % 360;
+  return θ;
+}
+
+/** Compass bearing along the polyline at fractional progress [0,1]. */
+export function routeBearingAtProgress(route: LatLng[], progress: number): number {
+  if (route.length < 2) return 0;
+  const p = Math.max(0, Math.min(1, progress));
+  const delta = 0.008;
+  const from = interpolateRoutePoint(route, p);
+  const to = interpolateRoutePoint(route, Math.min(1, p + delta));
+  if (!from || !to) return 0;
+  return bearingBetweenPoints(from, to);
+}

@@ -55,11 +55,26 @@ export async function submitDriverApplication(
     try {
       data = JSON.parse(text) as unknown;
     } catch {
+      console.error('[submitDriverApplication] Response is not JSON', {
+        endpoint,
+        status: res.status,
+        ok: res.ok,
+        bodyPreview: text.slice(0, 4000),
+      });
       throw new Error(`Invalid server response (${res.status})`);
     }
   }
 
   if (!res.ok) {
+    console.error('[submitDriverApplication] Request failed', {
+      endpoint,
+      status: res.status,
+      statusText: res.statusText,
+      uploadCount: uploads.length,
+      categories: uploads.map((u) => u.category),
+      responseBody: text?.slice(0, 4000) ?? '(empty)',
+      parsedBody: data,
+    });
     if (res.status === 413) {
       throw new Error('Upload too large. Please use smaller files or fewer documents.');
     }

@@ -13,9 +13,17 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { GOOGLE_MAP_STYLE_DARK } from '../map/googleMapStyles';
+import { SolidBlackRoutePolylines } from '../map/SolidBlackRoutePolylines';
+import {
+  UberDestinationEtaMarker,
+  UberDriverCarMarker,
+  UberPickupMarker,
+} from '../map/uberRiderMapMarkers';
 import type { MainScreenUi } from '../mainScreenUi';
 import type { ActiveTripState } from './activeTripTypes';
+import { routeBearingAtProgress } from './routeGeometry';
 import { RideDetailsBottomSheet } from './RideDetailsBottomSheet';
 
 /** Visible strip when the sheet is collapsed — enough to drag back up */
@@ -117,6 +125,13 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
   const maxStep = Math.max(0, tripPath.length - 1);
   const driverStep = Math.min(maxStep, Math.floor(progress * maxStep));
   const liveDriverCoordinate = tripPath[Math.min(driverStep, tripPath.length - 1)] ?? trip.pickup;
+
+  const driverProgress01 =
+    tripPath.length > 1 ? Math.min(1, driverStep / Math.max(1, tripPath.length - 1)) : 0;
+  const driverBearingDeg = useMemo(
+    () => routeBearingAtProgress(tripPath, driverProgress01),
+    [tripPath, driverProgress01]
+  );
 
   const fitMapToRoute = useCallback(
     (bottomPad: number) => {
@@ -238,28 +253,14 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
 
   const remainingSec = Math.max(0, totalEtaSec - elapsedSec);
   const liveEtaMin = Math.max(0, Math.ceil(remainingSec / 60));
-  const driverStatus =
-    trip.status === 'arrived'
-      ? 'Driver has arrived at pickup'
-      : trip.status === 'driver_arriving'
-        ? 'Driver is heading to pickup'
-        : driverStep >= tripPath.length - 1
-      ? 'You have arrived'
-      : isStopWindow(elapsedSec)
-        ? 'Trip paused briefly'
-        : 'Trip in progress';
-  const headerTitle =
-    trip.status === 'driver_arriving'
-      ? 'Driver arriving'
-      : trip.status === 'arrived'
-        ? 'Driver at pickup'
-        : trip.status === 'in_trip'
-          ? 'Ride in progress'
-          : trip.status === 'completed'
-            ? 'Trip completed'
-            : trip.status === 'cancelled'
-              ? 'Trip cancelled'
-              : 'Ride';
+
+  const etaMarkerCoord = trip.status === 'in_trip' ? trip.dropoff : trip.pickup;
+  const etaCaption = trip.status === 'in_trip' ? 'Arrival' : 'Pickup';
+  const etaLineText =
+    liveEtaMin <= 0 ? '< 1 min' : liveEtaMin === 1 ? '1 min' : `${liveEtaMin} min`;
+
+  const mapCustomStyle = isDark ? GOOGLE_MAP_STYLE_DARK : [];
+
   const initialRegion = useMemo(() => {
     const { pickup, dropoff } = trip;
     const minLat = Math.min(pickup.latitude, dropoff.latitude, liveDriverCoordinate.latitude);
@@ -276,6 +277,32 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
     };
   }, [trip, liveDriverCoordinate]);
 
+  const bannerTitle =
+    trip.status === 'driver_arriving'
+      ? 'Your driver is arriving now'
+      : trip.status === 'arrived'
+        ? 'Your driver has arrived'
+        : trip.status === 'in_trip'
+          ? 'Heading to your destination'
+          : trip.status === 'completed'
+            ? 'Trip completed'
+            : trip.status === 'cancelled'
+              ? 'Trip cancelled'
+              : trip.status === 'matched'
+                ? 'Driver matched'
+                : 'Your ride';
+
+  const bannerSubtitle =
+    trip.status === 'driver_arriving'
+      ? `Meet outside · ${trip.fromLabel || 'Pickup'}`
+      : trip.status === 'in_trip'
+        ? trip.toLabel || 'Destination'
+        : trip.status === 'arrived'
+          ? trip.fromLabel || 'Pickup'
+          : trip.status === 'matched'
+            ? trip.carDetails || 'Driver en route'
+            : '';
+
   return (
     <View style={[styles.root, { backgroundColor: ui.screenBg }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
@@ -285,58 +312,53 @@ export function ActiveRideScreen({ trip, ui, isDark, onEndTrip, onCancelRide }: 
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         style={styles.map}
         initialRegion={initialRegion}
+        customMapStyle={mapCustomStyle}
         onMapReady={() => {
           mapRef.current?.fitToCoordinates(
             [trip.pickup, trip.dropoff, liveDriverCoordinate],
-            { edgePadding: { top: 100, right: 48, bottom: mapBottomPad, left: 48 }, animated: false }
+            { edgePadding: { top: 120, right: 48, bottom: mapBottomPad, left: 48 }, animated: false }
           );
         }}
         showsUserLocation={false}
       >
         {trip.routeCoords.length > 1 ? (
-          <>
-            <Polyline
-              coordinates={trip.routeCoords}
-              strokeColor="rgba(255,255,255,0.95)"
-              strokeWidth={9}
-              lineCap="round"
-              lineJoin="round"
-              geodesic={false}
-            />
-            <Polyline
-              coordinates={trip.routeCoords}
-              strokeColor="#171717"
-              strokeWidth={6}
-              lineCap="round"
-              lineJoin="round"
-              geodesic={false}
-            />
-          </>
+          <SolidBlackRoutePolylines coordinates={trip.routeCoords} geodesic={false} />
         ) : null}
-        <Marker coordinate={trip.pickup} anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={[styles.dot, { backgroundColor: '#22c55e' }]} />
+
+        <Marker coordinate={etaMarkerCoord} anchor={{ x: 0.5, y: 1 }}>
+          <UberDestinationEtaMarker caption={etaCaption} etaLine={etaLineText} />
         </Marker>
-        <Marker coordinate={trip.dropoff} anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={[styles.dot, { backgroundColor: '#ef4444' }]} />
-        </Marker>
+
+        {trip.status === 'in_trip' ? (
+          <Marker coordinate={trip.pickup} anchor={{ x: 0.5, y: 0.5 }}>
+            <UberPickupMarker />
+          </Marker>
+        ) : null}
+
         <Marker coordinate={liveDriverCoordinate} anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={styles.driverPin}>
-            <Ionicons name="car-sport" size={22} color="#ffffff" />
-          </View>
+          <UberDriverCarMarker rotationDeg={driverBearingDeg - 90} />
         </Marker>
       </MapView>
 
-      <View style={[styles.headerOverlay, { backgroundColor: 'transparent' }]}>
-        <Pressable style={styles.backBtn} onPress={onEndTrip} hitSlop={12}>
-          <Ionicons name="arrow-back" size={24} color={ui.text} />
+      <View style={styles.headerOverlay}>
+        <Pressable style={styles.backFab} onPress={onEndTrip} hitSlop={12}>
+          <Ionicons name="arrow-back" size={22} color="#ffffff" />
         </Pressable>
-        <View style={[styles.topPill, { backgroundColor: ui.headerOverlay, borderColor: ui.divider }]}>
-          <Ionicons name="sparkles" size={16} color={ui.text} />
-          <Text style={[styles.topPillText, { color: ui.text }]} numberOfLines={1}>
-            Get ready, the driver will come soon
-          </Text>
+        <View style={styles.uberTopBanner}>
+          <View style={styles.uberBannerIconWrap}>
+            <Ionicons name="location" size={20} color="#ffffff" />
+          </View>
+          <View style={styles.uberBannerTextCol}>
+            <Text style={styles.uberBannerTitle} numberOfLines={2}>
+              {bannerTitle}
+            </Text>
+            {bannerSubtitle ? (
+              <Text style={styles.uberBannerSubtitle} numberOfLines={2}>
+                {bannerSubtitle}
+              </Text>
+            ) : null}
+          </View>
         </View>
-        <View style={styles.headerSpacer} />
       </View>
 
       {/* SOS floating button */}
@@ -443,31 +465,56 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 12,
-    paddingTop: Platform.OS === 'ios' ? 50 : 14,
-    paddingBottom: 8,
-    paddingHorizontal: 10,
+    paddingTop: Platform.OS === 'ios' ? 52 : 16,
+    paddingBottom: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  backFab: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  uberTopBanner: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#000000',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 12,
   },
-  headerSpacer: {
+  uberBannerIconWrap: {
     width: 40,
     height: 40,
-  },
-  topPill: {
-    flex: 1,
-    marginHorizontal: 8,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    flexDirection: 'row',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.85)',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
   },
-  topPillText: {
+  uberBannerTextCol: {
     flex: 1,
-    fontSize: 13,
+    gap: 3,
+  },
+  uberBannerTitle: {
+    fontSize: 15,
     fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: -0.2,
+  },
+  uberBannerSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.82)',
+    lineHeight: 17,
   },
   map: {
     flex: 1,
@@ -478,20 +525,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 10,
-  },
-  dot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#ffffff',
-  },
-  driverPin: {
-    backgroundColor: '#171717',
-    padding: 8,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: '#ffffff',
   },
 });
 

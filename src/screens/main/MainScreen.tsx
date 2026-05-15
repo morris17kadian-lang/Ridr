@@ -17,7 +17,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +39,7 @@ import {
   BOOKED_RIDES_STORAGE_KEY,
   PROFILE_ME_CACHE_KEY,
   clearAppCache,
+  clearProfileIdentityFromStorage,
 } from '../../lib/appCacheStorage';
 import { AUTH_SESSION_KEY, useAuth } from '../../context/AuthContext';
 import {
@@ -66,11 +67,14 @@ import {
   PROFILE_HEADER_ICON_GLYPH,
 } from './mainScreenLayoutConstants';
 import { RidrMapView } from './map/RidrMapView';
-import { useRidrMapMarkerStyles, useRidrMapRouteStroke } from './map/useRidrMapVisuals';
+import { SolidBlackRoutePolylines } from './map/SolidBlackRoutePolylines';
+import { UberDestinationEtaMarker, UberPickupMarker } from './map/uberRiderMapMarkers';
+import { useRidrMapMarkerStyles } from './map/useRidrMapVisuals';
 import { styles } from './styles/mainScreenStyles';
 import { ActivityTabScreen } from './tabs/ActivityTabScreen';
 import { FavouritesTabScreen } from './tabs/FavouritesTabScreen';
 import { SettingsTabScreen } from './tabs/SettingsTabScreen';
+import { isDriverApplicationApprovedNormalized } from '../../lib/driverApplicationGate';
 import { usePushToken } from '../../hooks/usePushToken';
 import type {
   ActiveTripState,
@@ -193,8 +197,49 @@ type MeResponse = {
   firstName?: string;
   lastName?: string;
   phone?: string;
+  username?: string;
   savedPlaces?: SavedPlace[];
 };
+
+/** Supports flat JSON, `{ user: {...} }`, or `{ data: {...} | { user } }` from the API. */
+function normalizeMeResponse(raw: unknown): MeResponse | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const root = raw as Record<string, unknown>;
+  let node: Record<string, unknown> = root;
+  if (root.user && typeof root.user === 'object') {
+    node = root.user as Record<string, unknown>;
+  } else if (root.data && typeof root.data === 'object') {
+    const d = root.data as Record<string, unknown>;
+    node =
+      d.user && typeof d.user === 'object' ? (d.user as Record<string, unknown>) : d;
+  }
+  const idRaw = node.id ?? node.userId;
+  const id =
+    typeof idRaw === 'string' && idRaw.trim()
+      ? idRaw.trim()
+      : typeof idRaw === 'number' && Number.isFinite(idRaw)
+        ? String(idRaw)
+        : '';
+  const email = typeof node.email === 'string' ? node.email.trim() : '';
+  if (!id || !email) return null;
+  const fn = node.firstName ?? node.first_name;
+  const ln = node.lastName ?? node.last_name;
+  const firstName = typeof fn === 'string' ? fn : undefined;
+  const lastName = typeof ln === 'string' ? ln : undefined;
+  const phone = typeof node.phone === 'string' ? node.phone : undefined;
+  const un = node.username ?? node.user_name;
+  const username = typeof un === 'string' ? un.trim() : undefined;
+  const savedPlaces = Array.isArray(node.savedPlaces) ? (node.savedPlaces as SavedPlace[]) : undefined;
+  return {
+    id,
+    email,
+    firstName,
+    lastName,
+    phone,
+    ...(username ? { username } : {}),
+    savedPlaces,
+  };
+}
 
 type BookedRideRecord = TripRecord;
 
@@ -550,7 +595,7 @@ function ProfileIcon({ size, color = '#171717' }: { size: number; color?: string
 // Tab icons use Ionicons (from @expo/vector-icons)
 
 export default function MainScreen() {
-  const { signOut, user, setAppMode, setUserRole } = useAuth();
+  const { signOut, user, setAppMode, driverModeEligible, refreshDriverProfile } = useAuth();
   const { colors, isDark, themeOverride, setThemeOverride } = useAppTheme();
   usePushToken();
   const [selectedRide, setSelectedRide] = useState('ride');
@@ -585,7 +630,7 @@ export default function MainScreen() {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   // Profile
-  const [userFirstName, setUserFirstName] = useState('Sarah');
+  const [userFirstName, setUserFirstName] = useState('');
   const [userLastName, setUserLastName] = useState('');
   const [userId, setUserId] = useState('');
   const [editingFirstName, setEditingFirstName] = useState('');
@@ -628,7 +673,6 @@ export default function MainScreen() {
   const [currentLocationLabel, setCurrentLocationLabel] = useState('Current location');
   const [roadRouteCoords, setRoadRouteCoords] = useState<LatLng[]>([]);
   const [routeEncodedPolyline, setRouteEncodedPolyline] = useState<string | null>(null);
-  const [routeAnimatorPoint, setRouteAnimatorPoint] = useState<LatLng | null>(null);
   const [routeIssue, setRouteIssue] = useState<string | null>(null);
   const [routeDurationSec, setRouteDurationSec] = useState(0);
   const [routeDistanceM, setRouteDistanceM] = useState(0);
@@ -647,6 +691,7 @@ export default function MainScreen() {
   const [refreshingMain, setRefreshingMain] = useState(false);
   /** Bumps when user clears cache so `/users/me` is refetched */
   const [profileCacheNonce, setProfileCacheNonce] = useState(0);
+  const profileSessionUidRef = useRef<string | null>(null);
   const toInputRef = useRef<TextInput>(null);
   const toFocusedRef = useRef(false);
   const destinationFocusedRef = useRef(false);
@@ -862,59 +907,18 @@ export default function MainScreen() {
 
   useEffect(() => {
     (async () => {
-      const [
-        savedFirst,
-        savedLast,
-        savedHome,
-        savedWork,
-        savedPhone,
-        savedE164FromStorage,
-        savedEmail,
-        savedUsername,
-        savedCountry,
-      ] = await Promise.all([
-        AsyncStorage.getItem('profile_first_name'),
-        AsyncStorage.getItem('profile_last_name'),
+      const [savedHome, savedWork, savedCountry] = await Promise.all([
         AsyncStorage.getItem('address_home'),
         AsyncStorage.getItem('address_work'),
-        AsyncStorage.getItem('profile_phone'),
-        AsyncStorage.getItem('profile_phone_e164'),
-        AsyncStorage.getItem('profile_email'),
-        AsyncStorage.getItem('profile_username'),
         AsyncStorage.getItem('profile_country_code'),
       ]);
-      if (savedFirst !== null) {
-        setUserFirstName(savedFirst);
-      } else {
-        setUserFirstName('Sarah');
-      }
-      if (savedLast !== null) {
-        setUserLastName(savedLast);
-      } else {
-        setUserLastName('');
-      }
+      /* Do not hydrate name/email/phone from AsyncStorage here — stale rows (e.g. QA "Melissa")
+       * would overwrite the signed-in session after AuthContext runs. Use `user` + `/users/me` only. */
       if (savedHome) setHomeAddress(savedHome);
       if (savedWork) setWorkAddress(savedWork);
       const country = savedCountry === '+1876' ? '+1' : (savedCountry || '+1');
       setCountryCode(country);
       setUserCountryCode(country);
-      if (savedPhone) {
-        const nat = migrateLegacyNational(savedPhone, country);
-        setUserPhone(nat);
-      }
-      if (savedEmail) setUserEmail(savedEmail);
-      if (savedUsername) setUserUsername(savedUsername);
-
-      if (savedE164FromStorage) {
-        setUserPhoneE164(savedE164FromStorage);
-      } else if (savedPhone) {
-        const nat = migrateLegacyNational(savedPhone, country);
-        const v = validateToE164(country, nat);
-        if (v.ok) {
-          setUserPhoneE164(v.e164);
-          await AsyncStorage.setItem('profile_phone_e164', v.e164);
-        }
-      }
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
@@ -938,6 +942,63 @@ export default function MainScreen() {
     })();
   }, []);
 
+  /** Profile identity follows signed-in session; clearing stale AsyncStorage avoids another user's QA data */
+  useEffect(() => {
+    if (!user) {
+      profileSessionUidRef.current = null;
+      return;
+    }
+
+    const prevUid = profileSessionUidRef.current;
+    const switched = prevUid !== null && prevUid !== user.uid;
+    profileSessionUidRef.current = user.uid;
+
+    setUserId(user.uid);
+    setUserEmail(user.email.trim().toLowerCase());
+
+    if (switched) {
+      void clearProfileIdentityFromStorage();
+      void AsyncStorage.multiRemove(['profile_cards', 'profile_default_card']);
+      setCards([]);
+      setDefaultCard(null);
+      setUserFirstName(user.firstName?.trim() ?? '');
+      setUserLastName(user.lastName?.trim() ?? '');
+      setUserPhone('');
+      setUserPhoneE164(null);
+      setUserUsername(user.username?.trim() ?? '');
+      void refreshDriverProfile();
+      setProfileCacheNonce((n) => n + 1);
+    } else {
+      setUserFirstName((prev) => prev.trim() || (user.firstName?.trim() ?? ''));
+      setUserLastName((prev) => prev.trim() || (user.lastName?.trim() ?? ''));
+      if (user.username?.trim()) {
+        setUserUsername((prev) => prev.trim() || user.username!.trim());
+      }
+    }
+
+    const rawPhone = user.phone?.trim();
+    if (!rawPhone) return;
+    if (switched) {
+      setUserPhoneE164(rawPhone);
+      const parsed = parsePhoneNumberFromString(rawPhone);
+      if (parsed?.nationalNumber) {
+        const cc = parsed.countryCallingCode ? `+${parsed.countryCallingCode}` : '+1';
+        setUserCountryCode((prev) => (prev.trim() ? prev : cc));
+        setCountryCode((prev) => (prev.trim() ? prev : cc));
+        setUserPhone(parsed.nationalNumber);
+      }
+      return;
+    }
+    setUserPhoneE164((prev) => prev ?? rawPhone);
+    const parsed = parsePhoneNumberFromString(rawPhone);
+    if (parsed?.nationalNumber) {
+      const cc = parsed.countryCallingCode ? `+${parsed.countryCallingCode}` : '+1';
+      setUserCountryCode((prev) => (prev.trim() ? prev : cc));
+      setCountryCode((prev) => (prev.trim() ? prev : cc));
+      setUserPhone((prev) => (prev.trim() ? prev : parsed.nationalNumber));
+    }
+  }, [user, refreshDriverProfile]);
+
   useEffect(() => {
     const applyMeToProfile = async (me: MeResponse, persistCache: boolean) => {
       const nextFirst = (me.firstName ?? '').trim();
@@ -946,16 +1007,19 @@ export default function MainScreen() {
       const nextPhone = (me.phone ?? '').trim();
       const nextSavedPlaces = Array.isArray(me.savedPlaces) ? me.savedPlaces : [];
 
-      if (nextFirst) {
-        setUserFirstName(nextFirst);
-        await AsyncStorage.setItem('profile_first_name', nextFirst);
-      }
+      setUserFirstName(nextFirst);
+      await AsyncStorage.setItem('profile_first_name', nextFirst);
       setUserLastName(nextLast);
       await AsyncStorage.setItem('profile_last_name', nextLast);
       setUserId(typeof me.id === 'string' ? me.id : '');
       setUserEmail(nextEmail);
       await AsyncStorage.setItem('profile_email', nextEmail);
       setSavedPlaces(nextSavedPlaces);
+      const nextUsername = (me.username ?? '').trim();
+      if (nextUsername) {
+        setUserUsername(nextUsername);
+        await AsyncStorage.setItem('profile_username', nextUsername);
+      }
 
       if (nextPhone) {
         setUserPhoneE164(nextPhone);
@@ -993,25 +1057,42 @@ export default function MainScreen() {
 
     const fetchMe = async () => {
       try {
+        const sessionRaw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
+        if (!sessionRaw) return;
+        const session = JSON.parse(sessionRaw) as {
+          accessToken?: string;
+          refreshToken?: string;
+          user?: {
+            id?: string;
+            uid?: string;
+            email?: string;
+            firstName?: string;
+            lastName?: string;
+            phone?: string;
+          };
+        };
+        const uidRaw = session.user?.uid ?? session.user?.id;
+        const sessionUid =
+          typeof uidRaw === 'string' && uidRaw.trim()
+            ? uidRaw.trim()
+            : typeof uidRaw === 'number' && Number.isFinite(uidRaw)
+              ? String(uidRaw)
+              : '';
+
         const cachedRaw = await AsyncStorage.getItem(PROFILE_ME_CACHE_KEY);
         if (cachedRaw) {
           try {
-            const cached = JSON.parse(cachedRaw) as MeResponse;
-            if (cached && typeof cached === 'object' && typeof cached.id === 'string') {
+            const cached = normalizeMeResponse(JSON.parse(cachedRaw));
+            if (cached && sessionUid && cached.id === sessionUid) {
               await applyMeToProfile(cached, false);
+            } else if (cached && sessionUid && cached.id !== sessionUid) {
+              await AsyncStorage.removeItem(PROFILE_ME_CACHE_KEY);
             }
           } catch {
             await AsyncStorage.removeItem(PROFILE_ME_CACHE_KEY);
           }
         }
 
-        const sessionRaw = await AsyncStorage.getItem(AUTH_SESSION_KEY);
-        if (!sessionRaw) return;
-        const session = JSON.parse(sessionRaw) as {
-          accessToken?: string;
-          refreshToken?: string;
-          user?: { id?: string; email?: string; firstName?: string; lastName?: string; phone?: string };
-        };
         const baseUrl = resolveBaseUrl();
         if (!baseUrl || !session?.accessToken) return;
 
@@ -1051,16 +1132,18 @@ export default function MainScreen() {
         }
 
         if (!res.ok) return;
-        const me = (await res.json()) as MeResponse;
-        if (!me || typeof me.id !== 'string' || typeof me.email !== 'string') return;
+        const rawJson: unknown = await res.json().catch(() => null);
+        const me = normalizeMeResponse(rawJson);
+        if (!me) return;
         await applyMeToProfile(me, true);
+        void refreshDriverProfile();
       } catch {
         /* keep local cached profile */
       }
     };
 
     void fetchMe();
-  }, [userCountryCode, profileCacheNonce]);
+  }, [userCountryCode, profileCacheNonce, refreshDriverProfile]);
 
   useEffect(() => {
     sheetMinimizedRef.current = sheetMinimized;
@@ -1442,6 +1525,9 @@ export default function MainScreen() {
 
   const displayName = userFirstName.trim() || 'Ridr';
   const shortUserId = userId.trim() ? userId.trim().slice(0, 5) : '';
+  /** App bar Drive — `drivers.applicationStatus` from `GET /drivers/me` (not user role). */
+  const canShowDriveHeaderButton = driverModeEligible;
+  console.log(canShowDriveHeaderButton)
   const ui = useMemo(
     () => ({
       screenBg: colors.background,
@@ -1467,8 +1553,6 @@ export default function MainScreen() {
     }),
     [colors]
   );
-
-  const mapRouteStroke = useRidrMapRouteStroke(isDark, colors.accent, colors.text);
 
   const mapMarkerStyles = useRidrMapMarkerStyles(isDark, {
     accent: colors.accent,
@@ -1892,10 +1976,24 @@ export default function MainScreen() {
           mimeType: item.mimeType,
         }))
       );
-      await setUserRole(response.user.role);
-      if (response.user.role === 'driver') {
-        await setAppMode('driver');
+      const eligible = await refreshDriverProfile();
+      if (eligible) {
+        try {
+          await setAppMode('driver');
+        } catch (modeErr) {
+          Alert.alert('Driver mode', modeErr instanceof Error ? modeErr.message : 'Could not open Driver mode.');
+          setScreen('home');
+          return;
+        }
         Alert.alert('Application approved', response.message ?? 'You are now a verified driver.');
+        setScreen('home');
+        return;
+      }
+      if (isDriverApplicationApprovedNormalized(response.status)) {
+        Alert.alert(
+          'Application approved',
+          response.message ?? 'Your driver record is approved — pull to refresh if Drive does not appear yet.'
+        );
         setScreen('home');
         return;
       }
@@ -1905,10 +2003,16 @@ export default function MainScreen() {
       );
       setScreen('home');
     } catch (e) {
+      console.error('[BecomeDriver] submitBecomeDriverApplication failed', {
+        uploadCount: uploads.length,
+        kinds: uploads.map((u) => u.kind),
+        error: e,
+        message: e instanceof Error ? e.message : String(e),
+      });
       const msg = e instanceof Error ? e.message : 'Could not submit driver application.';
       Alert.alert('Application error', msg);
     }
-  }, [setAppMode, setUserRole]);
+  }, [setAppMode, refreshDriverProfile]);
 
   // When zooming phase starts: fit map to show driver spots, then transition to readySwipe
   useEffect(() => {
@@ -2170,32 +2274,6 @@ export default function MainScreen() {
 
   const showOriginTextPin = !hasRoute && !isCurrentLocationQuery && !!originPreviewCoordinate;
   const showDestPreviewPin = !hasRoute && !!destinationPreviewCoordinate;
-
-  useEffect(() => {
-    if (!hasRoute) {
-      setRouteAnimatorPoint(null);
-      return;
-    }
-
-    let stopped = false;
-    let raf = 0;
-    const startedAt = Date.now();
-    const durationMs = 6000;
-
-    const tick = () => {
-      if (stopped) return;
-      const elapsed = (Date.now() - startedAt) % durationMs;
-      const progress = elapsed / durationMs;
-      setRouteAnimatorPoint(interpolateRoutePoint(roadRouteCoords, progress));
-      raf = requestAnimationFrame(tick);
-    };
-
-    raf = requestAnimationFrame(tick);
-    return () => {
-      stopped = true;
-      cancelAnimationFrame(raf);
-    };
-  }, [hasRoute, roadRouteCoords]);
 
   const MAP_ANIMATE_DELTA = { latitudeDelta: 0.022, longitudeDelta: 0.022 };
 
@@ -2969,35 +3047,13 @@ export default function MainScreen() {
         >
           {hasRoute ? (
             <>
-              <Polyline
-                coordinates={roadRouteCoords}
-                strokeColor={mapRouteStroke.outer}
-                strokeWidth={9}
-                lineCap="round"
-                lineJoin="round"
-                geodesic={false}
-              />
-              <Polyline
-                coordinates={roadRouteCoords}
-                strokeColor={mapRouteStroke.inner}
-                strokeWidth={6}
-                lineCap="round"
-                lineJoin="round"
-                geodesic={false}
-              />
+              <SolidBlackRoutePolylines coordinates={roadRouteCoords} geodesic={false} />
               <Marker coordinate={pickupCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={mapMarkerStyles.pickup} />
+                <UberPickupMarker />
               </Marker>
-              <Marker coordinate={dropoffCoordinate!} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={mapMarkerStyles.dropoff} />
+              <Marker coordinate={dropoffCoordinate!} anchor={{ x: 0.5, y: 1 }}>
+                <UberDestinationEtaMarker caption="Arrival" etaLine={rideEtaLabel} />
               </Marker>
-              {routeAnimatorPoint ? (
-                <Marker coordinate={routeAnimatorPoint} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={mapMarkerStyles.routeAnimatorOuter}>
-                    <View style={mapMarkerStyles.routeAnimatorInner} />
-                  </View>
-                </Marker>
-              ) : null}
             </>
           ) : (
             <>
@@ -3046,18 +3102,29 @@ export default function MainScreen() {
             </View>
           </View>
           <View style={styles.headerActions}>
-            <Pressable
-              style={[styles.modeSwitchButton, { backgroundColor: ui.softBg, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.divider }]}
-              onPress={() => {
-                hapticLight();
-                setScreen('becomeDriver');
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Switch to driver mode"
-            >
-              <Ionicons name="car-sport-outline" size={15} color={ui.text} />
-              <Text style={[styles.modeSwitchButtonText, { color: ui.text }]}>Drive</Text>
-            </Pressable>
+            {canShowDriveHeaderButton ? (
+              <Pressable
+                style={[styles.modeSwitchButton, { backgroundColor: ui.softBg, borderWidth: StyleSheet.hairlineWidth, borderColor: ui.divider }]}
+                onPress={() => {
+                  hapticLight();
+                  void (async () => {
+                    try {
+                      await setAppMode('driver');
+                    } catch (e) {
+                      Alert.alert(
+                        'Driver mode',
+                        e instanceof Error ? e.message : 'Could not switch to driver.'
+                      );
+                    }
+                  })();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Switch to driver mode"
+              >
+                <Ionicons name="car-sport-outline" size={15} color={ui.text} />
+                <Text style={[styles.modeSwitchButtonText, { color: ui.text }]}>Drive</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               style={[styles.supportButton, { backgroundColor: '#FFD000' }]}
               onPress={() => {

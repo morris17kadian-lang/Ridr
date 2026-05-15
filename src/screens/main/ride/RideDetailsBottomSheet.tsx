@@ -1,13 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View, type GestureResponderHandlers } from 'react-native';
-import { greyCarAsset } from '../../../assets/images';
+import { Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View, type GestureResponderHandlers } from 'react-native';
 import { hapticMedium, hapticWarning } from '../../../lib/haptics';
 import type { MainScreenUi } from '../mainScreenUi';
 import type { ActiveTripState, TripCancelReason } from './activeTripTypes';
 
 const ACCENT = '#FFD000';
-const SIZE_PILL_BLUE = '#2563eb';
 const CANCEL_FEE_FREE = 0;
 const CANCEL_FEE_PARTIAL = 2.50;
 const CANCEL_FEE_FULL_FARE = -1; // -1 means full fare applies
@@ -73,15 +71,6 @@ function getInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-function formatMinSec(totalSec: number): string {
-  const sec = Math.max(0, Math.floor(totalSec));
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  const mm = String(m).padStart(2, '0');
-  const ss = String(s).padStart(2, '0');
-  return `${mm}:${ss}`;
-}
-
 type Props = {
   trip: ActiveTripState;
   ui: MainScreenUi;
@@ -129,89 +118,59 @@ export function RideDetailsBottomSheet({
   const initials = getInitials(name);
   const avatarBg = avatarColor(name);
   const driverRating = trip.rating != null && trip.rating > 0 ? trip.rating : 4.5;
-  const etaLabel = `${formatMinSec(etaCountdownSec)} Mins`;
-
   return (
     <View style={[styles.card, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-      {/* Black arrival bar */}
       <Pressable
-        style={styles.arrivalBar}
+        style={styles.handleRow}
         onPress={onToggleCollapse}
         accessibilityRole="button"
         accessibilityLabel="Toggle ride details"
         {...(headerPanHandlers ?? {})}
       >
-        <Ionicons name="hourglass-outline" size={18} color="#ffffff" />
-        <Text style={styles.arrivalBarText} numberOfLines={1}>
-          The driver will arrive in
-        </Text>
-        <View style={styles.arrivalBarPill}>
-          <Text style={styles.arrivalBarPillText}>{etaLabel}</Text>
-        </View>
+        <View style={[styles.grabber, { backgroundColor: ui.divider }]} />
       </Pressable>
 
-      {/* Sheet surface */}
       <View style={styles.surfaceShadow}>
         <View style={[styles.surface, { backgroundColor: ui.cardBg, borderColor: ui.divider }]}>
-          {/* Vehicle */}
-          <View style={styles.vehicleRow}>
-            <View style={styles.vehicleLeft}>
-              <Text style={[styles.plateNumber, { color: ui.text }]}>{trip.plate || '—'}</Text>
-              <Text style={[styles.vehicleSub, { color: ui.textMuted }]} numberOfLines={1}>
-                {trip.carDetails || 'Vehicle'}
-              </Text>
-            </View>
-            <View style={styles.vehicleRight}>
-              <Image source={greyCarAsset} style={styles.carImg} resizeMode="contain" />
-              <View style={[styles.sizePill, { backgroundColor: SIZE_PILL_BLUE }]}>
-                <Text style={styles.sizePillText}>Medium Size</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: ui.divider }]} />
-
-          {/* Driver */}
-          <View style={styles.driverRow}>
-            <View style={styles.avatarWrap}>
+          <View style={styles.uberHero}>
+            <View style={styles.avatarCol}>
               <View style={[styles.driverAvatar, { backgroundColor: avatarBg }]}>
                 <Text style={styles.driverAvatarText}>{initials}</Text>
               </View>
-              <View style={styles.ratingOverlay}>
-                <Text style={styles.ratingOverlayText}>{driverRating.toFixed(1)}</Text>
-                <Ionicons name="star" size={12} color={ACCENT} />
-              </View>
             </View>
-
-            <View style={styles.driverMeta}>
-              <Text style={[styles.driverName, { color: ui.text }]} numberOfLines={1}>
+            <View style={styles.uberMeta}>
+              <Text style={[styles.uberNameLine, { color: ui.text }]} numberOfLines={1}>
                 {name}
+                <Text style={[styles.uberRatingInline, { color: ui.text }]}> {driverRating.toFixed(1)}</Text>
+                <Text style={[styles.uberStarChar, { color: ui.text }]}>★</Text>
               </Text>
-              <Text style={[styles.driverSub, { color: ui.textMuted }]} numberOfLines={1}>
-                Top Rated Driver 🏆
+              <Text style={[styles.uberCarLine, { color: ui.textMuted }]} numberOfLines={1}>
+                {trip.carDetails || 'Vehicle'}
               </Text>
             </View>
+            <View style={[styles.uberPlateBox, { borderColor: ui.text }]}>
+              <Text style={[styles.uberPlateText, { color: ui.text }]} numberOfLines={1}>
+                {trip.plate || '—'}
+              </Text>
+            </View>
+          </View>
 
-            <View style={styles.driverActions}>
-              <Pressable
-                style={styles.actionBtn}
-                onPress={() => {
-                  if (trip.driverPhone) {
-                    Linking.openURL(`tel:${trip.driverPhone}`);
-                  } else {
-                    Alert.alert('No number', 'Driver phone number is not available.');
-                  }
-                }}
-              >
-                <Ionicons name="call" size={18} color={ACCENT} />
-              </Pressable>
-              <Pressable
-                style={styles.actionBtn}
-                onPress={() => setShowDriverChat(true)}
-              >
-                <Ionicons name="chatbubble-ellipses" size={16} color={ACCENT} />
-              </Pressable>
-            </View>
+          <View style={styles.uberQuickRow}>
+            <Pressable
+              style={styles.uberRoundBtn}
+              onPress={() => {
+                if (trip.driverPhone) {
+                  Linking.openURL(`tel:${trip.driverPhone}`);
+                } else {
+                  Alert.alert('No number', 'Driver phone number is not available.');
+                }
+              }}
+            >
+              <Ionicons name="call" size={20} color="#ffffff" />
+            </Pressable>
+            <Pressable style={styles.uberRoundBtn} onPress={() => setShowDriverChat(true)}>
+              <Ionicons name="chatbubble-ellipses" size={18} color="#ffffff" />
+            </Pressable>
           </View>
 
           <View style={[styles.divider, { backgroundColor: ui.divider }]} />
@@ -552,8 +511,8 @@ const styles = StyleSheet.create({
   },
   handleRow: {
     alignItems: 'center',
-    paddingTop: 8,
-    paddingBottom: 12,
+    paddingTop: 6,
+    paddingBottom: 10,
     marginHorizontal: -16,
     paddingHorizontal: 16,
   },
@@ -561,37 +520,71 @@ const styles = StyleSheet.create({
     width: 40,
     height: 5,
     borderRadius: 3,
-    opacity: 0.35,
+    opacity: 0.45,
   },
 
-  // Black arrival bar
-  arrivalBar: {
-    ...shadowLift,
+  uberHero: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#171717',
-    borderRadius: 18,
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 12,
-    gap: 10,
+    paddingTop: 4,
+    paddingBottom: 12,
+    gap: 12,
   },
-  arrivalBarText: {
+  avatarCol: {
+    width: 56,
+    alignItems: 'center',
+  },
+  uberMeta: {
     flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#ffffff',
+    minWidth: 0,
+    gap: 2,
   },
-  arrivalBarPill: {
-    backgroundColor: '#2b2b2b',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  arrivalBarPillText: {
-    fontSize: 12,
+  uberNameLine: {
+    fontSize: 16,
     fontWeight: '800',
-    color: '#ffffff',
+    letterSpacing: -0.3,
+  },
+  uberRatingInline: {
+    fontWeight: '800',
+    color: '#171717',
+  },
+  uberStarChar: {
+    fontSize: 14,
+    color: '#000000',
+  },
+  uberCarLine: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  uberPlateBox: {
+    borderWidth: 1,
+    borderColor: '#000000',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uberPlateText: {
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  uberQuickRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+    paddingBottom: 14,
+  },
+  uberRoundBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // Surface
@@ -610,63 +603,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
 
-  // Vehicle
-  vehicleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  vehicleLeft: {
-    flex: 1,
-    gap: 4,
-    paddingLeft: 28,
-  },
-  plateNumber: {
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-  },
-  vehicleSub: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  vehicleRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'flex-end',
-    gap: 6,
-  },
-  carImg: {
-    width: 120,
-    height: 64,
-  },
-  sizePill: {
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  sizePillText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-
-  // Driver
-  driverRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  avatarWrap: {
-    position: 'relative',
-    width: 56,
-    height: 56,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
   driverAvatar: {
     width: 52,
     height: 52,
@@ -678,51 +614,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     color: '#ffffff',
-  },
-  ratingOverlay: {
-    position: 'absolute',
-    left: 0,
-    bottom: -6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ffffff',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e5e5',
-  },
-  ratingOverlayText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#171717',
-  },
-  driverMeta: {
-    flex: 1,
-    gap: 3,
-  },
-  driverName: {
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.2,
-  },
-  driverSub: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  driverActions: {
-    flexDirection: 'row',
-    gap: 10,
-    flexShrink: 0,
-  },
-  actionBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#171717',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 
   // Route
